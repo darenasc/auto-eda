@@ -35,7 +35,6 @@ CREATE TABLE `city` (
   `Population` INT(11) NOT NULL DEFAULT '0',
   PRIMARY KEY (`ID`),
   KEY `CountryCode` (`CountryCode`)
-  --CONSTRAINT `city_ibfk_1` FOREIGN KEY (`CountryCode`) REFERENCES `country` (`Code`)
 ) ENGINE=InnoDB AUTO_INCREMENT=4080 DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -80,7 +79,6 @@ CREATE TABLE `countrylanguage` (
   `Percentage` FLOAT(4,1) NOT NULL DEFAULT '0.0',
   PRIMARY KEY (`CountryCode`,`Language`),
   KEY `CountryCode` (`CountryCode`)
-  --CONSTRAINT `countryLanguage_ibfk_1` FOREIGN KEY (`CountryCode`) REFERENCES `country` (`Code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
