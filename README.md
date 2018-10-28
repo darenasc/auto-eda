@@ -2,9 +2,10 @@
 Automated Exploratory Data Analysis. Simplifying Data Exploration.
 
 Basic data exploration on databases. Currently supports:
-* MSSQL Server
-* MySQL, and 
-* SQLite.
+* MSSQL Server,
+* MySQL, 
+* SQLite, and
+* PostgreSQL.
 
 Given a connection to a database it will collect the necessary metadata for a exploration such as:
 * Number of records and columns.
