@@ -9,11 +9,13 @@ Examples in Docker. Examples have four steps.
 ## 1. MySQL
 1) Runing the follwoing script it is possible to create a MySQL database for testing.
 
-```docker run --name mysql-demo -p 6603:3306 --rm -e MYSQL_USER=demo -e MYSQL_PASSWORD=demo -e MYSQL_ROOT_PASSWORD=rootpassword -e MYSQL_DATABASE=metadata -d mysql:8.0```
+`docker run --name mysql-demo -p 6603:3306 --rm -e MYSQL_USER=demo -e MYSQL_PASSWORD=demo -e MYSQL_ROOT_PASSWORD=rootpassword -e MYSQL_DATABASE=metadata -d mysql:8.0`
 
 You need to add preferred parameters for this environmental variables `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_ROOT_PASSWORD` when you run the script. 
 
 ```
+git clone https://github.com/darenasc/auto-eda
+cd auto-eda/src/sql_scripts/mysql/
 docker cp world.sql mysql-demo:/tmp
 docker exec -it mysql-demo bash
 mysql -prootpassword < /tmp/world.sql

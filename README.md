@@ -1,6 +1,8 @@
 # Auto-EDA
 Automated Exploratory Data Analysis. Simplifying Data Exploration.
 
+You can check some examples in the [documentation](docs/Documentation.md).
+
 Basic data exploration on databases. Currently supports:
 * MSSQL Server,
 * MySQL, 
