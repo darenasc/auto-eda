@@ -28,3 +28,4 @@ The metadata from the `source` database will be stored in a `metadata` database 
 - [ ] Update frequencies at once after collecting all the distinct values.
 - [ ] Encapsulate SQL code and reference it by engine: 'sqlserver', 'mysql', 'postgres', 'sqlite', etc.
 - [ ] Add multithreading  processing to the queries.
+- [ ] Resume mode, now it deletes and insert again.

@@ -18,6 +18,10 @@ logger = logging.getLogger(__name__)
 source_connection_params = 'string_connections/<YOUR_SOURCE_CONNECTION>'
 metadata_connection_params = 'string_connections/<YOUR_METADATA_CONNECTION>'
 
+# Possible values ['mssqlserver', 'mysql', 'postgres', 'sqlite']
+SOURCE_ENGINE = 'mssqlserver'
+METADATA_ENGINE = 'mssqlserver'
+
 def close_db_sqlite(db):
     db.close()
     return
@@ -138,26 +142,27 @@ def close_db_cursor(cursor):
     cursor.close()
     return
 
+# Connection to the Source database.
 conn_source = get_db_connection(source_connection_params)
 print('[', colored('OK', 'green'), ']', '\tConnection established with source...')
 cursor_source = get_db_cursor(conn_source)
 print('[', colored('OK', 'green'), ']', '\tCursor aquired from source...')
 
-#cursor_source.close()
-#conn_source.close()
-
-#conn_metadata = get_db_sqlite('data', 'metadata')
-#cursor_metadata = conn_metadata.cursor()
-
-#cursor_metadata.close()
-
-#conn_metadata.close()
-
-# Connection to Explore database.
+# Connection to the Metadata database.
 conn_metadata = get_db_connection(metadata_connection_params)
 print('[', colored('OK', 'green'), ']', '\tConnection established with target...')
 cursor_metadata = conn_metadata.cursor()
 print('[', colored('OK', 'green'), ']', '\tCursor aquired from target...')
+
+def getColumnsFromServer(server_name):
+    sql = """select distinct SERVER_NAME 
+                , TABLE_CATALOG 
+                , TABLE_SCHEMA 
+                , TABLE_NAME
+                from columns
+                where SERVER_NAME = ?;"""
+    cursor_metadata.execute(sql, (server_name,))
+    return cursor_metadata.fetchall()
 
 def insertOrUpdateColumns(server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type, verbose= False):
     def checkIfTableExistInColumns(server_name, table_catalog, table_schema, table_name, column_name):
@@ -186,31 +191,6 @@ def insertOrUpdateColumns(server_name, table_catalog, table_schema, table_name, 
     conn_metadata.commit()
     if verbose:
         logger.info('{}.{}.{}.{}.{} has been updated into summary...'.format(server_name, table_catalog, table_schema, table_name, column_name))
-    return
-
-def fill_columns(server_name):
-    print('\n[', colored('OK', 'green'), ']', """\tCollecting data about the:
-    \tserver, catalog, database, table names, and column names. 
-    \tEach row is a column of a table of the database.\n""")
-    sql = """SELECT ? AS SERVER_NAME
-            , C.TABLE_CATALOG
-            , C.TABLE_SCHEMA
-            , C.TABLE_NAME
-            , C.COLUMN_NAME
-            , C.ORDINAL_POSITION
-            , C.DATA_TYPE
-        FROM INFORMATION_SCHEMA.COLUMNS AS C INNER JOIN INFORMATION_SCHEMA.TABLES AS T
-        ON C.TABLE_CATALOG = T.TABLE_CATALOG
-        AND C.TABLE_SCHEMA = T.TABLE_SCHEMA
-        AND C.TABLE_NAME = T.TABLE_NAME
-        AND T.TABLE_TYPE = 'BASE TABLE';"""
-
-    cursor_source.execute(sql, server_name)
-    rows = cursor_source.fetchall()
-
-    for row in tqdm(rows, desc = 'Columns'):
-        server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type = row
-        insertOrUpdateColumns(server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type)
     return
 
 def insertOrUpdateTables(server_name, table_catalog, table_schema, table_name, verbose = False, ignore_views = True):
@@ -283,29 +263,6 @@ def insertOrUpdateTables(server_name, table_catalog, table_schema, table_name, v
         
     return
 
-def fill_tables(server_name):
-    """
-    
-    TODO:
-    - add query times to the metadata about the table.
-    """
-    print('\n[', colored('OK', 'green'), ']', """\tCollecting number of rows and columns of each table. 
-    \tEach row is a table of the database.\n""")
-    sql = """select distinct SERVER_NAME 
-                , TABLE_CATALOG 
-                , TABLE_SCHEMA 
-                , TABLE_NAME
-                from columns
-                where SERVER_NAME = ?;"""
-    cursor_metadata.execute(sql, (server_name,))
-    rows = cursor_metadata.fetchall()
-    pbar = tqdm(rows)
-    #for row in tqdm(rows, desc='Tables'):
-    for row in pbar:
-        pbar.set_description('Table {}'.format(row[3]))
-        insertOrUpdateTables(row[0],row[1],row[2],row[3], verbose = False)
-    return
-
 def insertOrUpdateUniques(server_name, table_catalog, table_schema, table_name, verbose = False):
     def checkIfTableExistInUniques(server_name, table_catalog, table_schema, table_name):
         sql = """select * from uniques
@@ -370,28 +327,7 @@ def insertOrUpdateUniques(server_name, table_catalog, table_schema, table_name, 
             
     return
 
-def fill_uniques(server_name):
-    print('\n[', colored('OK', 'green'), ']', """\tCollecting the number of NULL values and 
-    \tthe number of unique data values. 
-    \tEach row represents a column of a table.\n""")
-    sql = """select distinct SERVER_NAME 
-                , TABLE_CATALOG 
-                , TABLE_SCHEMA 
-                , TABLE_NAME
-                , N_ROWS
-                from tables
-                where SERVER_NAME = ?
-                    and N_ROWS > 0
-                order by N_ROWS;"""
-    cursor_metadata.execute(sql, (server_name,))
-    rows = cursor_metadata.fetchall()
-    pbar = tqdm(rows)
-    for row in pbar:
-        pbar.set_description('Table {} {:,} records'.format(row[3], row[4]))
-        insertOrUpdateUniques(row[0],row[1],row[2],row[3], verbose = False)
-    return
-
-def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_name, verbose = False, threshold = 5000):
+def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_name, verbose = False, threshold = 5000, with_data_sample = False, n_samples = 10000):
     """
     Stores each distinct data value of each column based on a threshould of distinct values
     (5000 distinct values by default) and has the frequency of the data value. 
@@ -431,20 +367,30 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
         cursor_metadata.execute(sql_fields, (server_name, table_catalog, table_schema, table_name))
         return cursor_metadata.fetchall()
     
-    def insertFrequencyValue(server_name, table_catalog, table_schema, table_name, column_name, threshold):
+    def insertFrequencyValue(server_name, table_catalog, table_schema, table_name, column_name, threshold, with_data_sample = False, n_samples = 10000):
         num_distinct_values = getNumDistinctValues(server_name, table_catalog, table_schema, table_name, column_name)
         
         if num_distinct_values < threshold:
-            sql_frequency = """SELECT [{}]
+            if SOURCE_ENGINE == 'mssqlserver' and with_data_sample:
+                sql_frequency = """WITH t as (
+                                        select * FROM {1}.{2}.{3} TABLESAMPLE ({4} ROWS) REPEATABLE ({5})
+                                    )
+                                SELECT t.[{0}]
                                     , COUNT(*) AS N 
-                                FROM {}.{}.{} 
-                                GROUP BY [{}] 
-                                ORDER BY N DESC;""".format(column_name, table_catalog, table_schema, table_name, column_name)
+                                FROM t
+                                GROUP BY t.[{0}] 
+                                ORDER BY N DESC;""".format(column_name, table_catalog, table_schema, table_name, n_samples, 42)
+            else:
+                sql_frequency = """SELECT [{0}]
+                                    , COUNT(*) AS N 
+                                FROM {1}.{2}.{3} 
+                                GROUP BY [{0}] 
+                                ORDER BY N DESC;""".format(column_name, table_catalog, table_schema, table_name)
+
             cursor_source.execute(sql_frequency)
             rows = cursor_source.fetchall()
 
             pbar = tqdm(rows)
-            #for row in rows:
             for row in pbar:
                 pbar.set_description('Distinct values')
                 sql_insert = """insert into data_values (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_VALUE, FREQUENCY_NUMBER)
@@ -481,7 +427,6 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
         cursor_metadata.execute(sql_frequency, (server_name, table_catalog, table_schema, table_name, column_name))
         rows = cursor_metadata.fetchall()
         pbar = tqdm(rows)
-        #for row in rows:
         for row in pbar:
             pbar.set_description('Percentage')
             sql_update = """UPDATE data_values SET FREQUENCY_PERCENTAGE = ?
@@ -506,10 +451,17 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
         rows = cursor_metadata.fetchone()
         return rows[0]
     
-    columns = getColumnsFromTable(server_name, table_catalog, table_schema, table_name)
+    def getNumberOfRows(server_name, table_catalog, table_schema, table_name):
+        sql = """select N_ROWS from tables
+                WHERE SERVER_NAME = ?
+                    AND TABLE_CATALOG = ?
+                    AND TABLE_SCHEMA = ?
+                    AND TABLE_NAME = ?;"""
+        cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name))
+        return cursor_metadata.fetchall()[0][0]
     
+    columns = getColumnsFromTable(server_name, table_catalog, table_schema, table_name)
     pbar = tqdm(columns)
-    #for column in tqdm(columns, desc = 'Columns'):
     for column in pbar:
         pbar.set_description('Column %s' % column[4])
         if checkIfTableExistInDataValues(server_name, table_catalog, table_schema, table_name, column[4]):
@@ -522,34 +474,12 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
             cursor_metadata.execute(sql_delete, (server_name, table_catalog, table_schema, table_name, column[4]))
             conn_metadata.commit()
         
-        insertFrequencyValue(server_name, table_catalog, table_schema, table_name, column[4], threshold)
+        insertFrequencyValue(server_name, table_catalog, table_schema, table_name, column[4], threshold, with_data_sample, n_samples)
         #insertFrequencyPercentage(server_name, table_catalog, table_schema, table_name, column[4])
         
         if verbose:
             logger.info('{}.{}.{}.{}.{} updated into data_values...'.format(server_name, table_catalog, table_schema, table_name, column[4]))
     
-    return
-
-def fill_data_values(server_name):
-    print('\n[', colored('OK', 'green'), ']', """\tCollecting the frequency count of each data 
-    \tvalue of each columns up to a threshould of 5,000 
-    \tdistinct values by default.\n""")
-    sql = """select distinct SERVER_NAME 
-                , TABLE_CATALOG 
-                , TABLE_SCHEMA 
-                , TABLE_NAME
-                , N_ROWS
-                from tables
-                where SERVER_NAME = ?
-                    and N_ROWS > 0
-                order by N_ROWS;"""
-    cursor_metadata.execute(sql, (server_name,))
-    rows = cursor_metadata.fetchall()
-    pbar = tqdm(rows)
-    #for row in tqdm(rows, desc = 'Tables'):
-    for row in pbar:
-        pbar.set_description('Table {} {:,} records'.format(row[3], row[4]))
-        insertOrUpdateDataValues(row[0],row[1],row[2],row[3], verbose = False)
     return
 
 def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, verbose = False, thresold = 5000):
@@ -589,7 +519,7 @@ def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, ve
                              AND TABLE_CATALOG = ?
                              AND TABLE_SCHEMA = ?
                              AND TABLE_NAME = ?
-                             AND DATA_TYPE IN ('datetime', 'timestamp', 'date');"""
+                             AND DATA_TYPE IN ('datetime', 'timestamp', 'date', 'datetime2', 'smalldatetime');"""
         cursor_metadata.execute(sql_datetimes, (server_name, table_catalog, table_schema, table_name))
         return cursor_metadata.fetchall()
     
@@ -672,27 +602,6 @@ def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, ve
     
     return
 
-def fill_dates(server_name):
-    print('\n[', colored('OK', 'green'), ']', """\tCollecting monthly summary of columns of types 
-    \t'datetime', 'timestamp', or 'date'\n""")
-    sql = """select distinct SERVER_NAME 
-                , TABLE_CATALOG 
-                , TABLE_SCHEMA 
-                , TABLE_NAME
-                , N_ROWS
-                from tables
-                where SERVER_NAME = ?
-                    and N_ROWS > 0
-                order by N_ROWS;"""
-    cursor_metadata.execute(sql, (server_name,))
-    rows = cursor_metadata.fetchall()
-    pbar = tqdm(rows)
-    #for row in tqdm(rows, desc = 'Tables'):
-    for row in pbar:
-        pbar.set_description('Table {} {:,} records'.format(row[3], row[4]))
-        insertOrUpdateDates(row[0],row[1],row[2],row[3], verbose = False)
-    return
-
 def insertOrUpdateStats(server_name, table_catalog, table_schema, table_name, verbose = False, level = 'one'):
     """
     Three levels:
@@ -759,7 +668,7 @@ def insertOrUpdateStats(server_name, table_catalog, table_schema, table_name, ve
         cursor_source.execute(sql_stats)
         rows = cursor_source.fetchall()
         for row in rows:
-            sql_insert = """insert into stats (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, AVG, STDEV, VAR, SUM, MAX, MIN, RANGE)
+            sql_insert = """insert into stats (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, AVG, STDEV, VAR, SUM, MAX, MIN, RANGE_)
                             values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"""
             cursor_metadata.execute(sql_insert, (server_name, table_catalog, table_schema, table_name, column_name, row[0], row[1], row[2], row[3], row[4], row[5], row[6]))
             conn_metadata.commit()
@@ -838,8 +747,11 @@ def insertOrUpdateStats(server_name, table_catalog, table_schema, table_name, ve
     
     return
 
-def fill_stats(server_name):
-    print('\n[', colored('OK', 'green'), ']', """\tCollecting Statistics of the numeric variables.\n""")
+def getTablesFromServer(server_name, n_rows_gt = 0):
+    """
+    Given a server name, it will returns SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, and N_ROWS.
+    This list can be used to go over each table and process it.
+    """
     sql = """select distinct SERVER_NAME 
                 , TABLE_CATALOG 
                 , TABLE_SCHEMA 
@@ -847,12 +759,86 @@ def fill_stats(server_name):
                 , N_ROWS
                 from tables
                 where SERVER_NAME = ?
-                    and N_ROWS > 0
-                order by N_ROWS;"""
+                    and N_ROWS > {}
+                order by N_ROWS;""".format(n_rows_gt)
     cursor_metadata.execute(sql, (server_name,))
-    rows = cursor_metadata.fetchall()
-    pbar = tqdm(rows)
-    #for row in tqdm(rows, desc = 'Tables'):
+    return cursor_metadata.fetchall()
+
+def fill_columns(server_name):
+    print('\n[', colored('OK', 'green'), ']', """\tCollecting data about the:
+    \tserver, catalog, database, table names, and column names. 
+    \tEach row is a column of a table of the database.\n""")
+    sql = """SELECT ? AS SERVER_NAME
+            , C.TABLE_CATALOG
+            , C.TABLE_SCHEMA
+            , C.TABLE_NAME
+            , C.COLUMN_NAME
+            , C.ORDINAL_POSITION
+            , C.DATA_TYPE
+        FROM INFORMATION_SCHEMA.COLUMNS AS C INNER JOIN INFORMATION_SCHEMA.TABLES AS T
+        ON C.TABLE_CATALOG = T.TABLE_CATALOG
+        AND C.TABLE_SCHEMA = T.TABLE_SCHEMA
+        AND C.TABLE_NAME = T.TABLE_NAME
+        AND T.TABLE_TYPE = 'BASE TABLE';"""
+
+    cursor_source.execute(sql, server_name)
+    rows = cursor_source.fetchall()
+
+    for row in tqdm(rows, desc = 'Columns'):
+        server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type = row
+        insertOrUpdateColumns(server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type)
+    return
+
+def fill_tables(server_name):
+    """
+    TODO:
+    - add query times to the metadata about the table.
+    """
+    print('\n[', colored('OK', 'green'), ']', """\tCollecting number of rows and columns of each table. 
+    \tEach row is a table of the database.\n""")
+    
+    pbar = tqdm(getColumnsFromServer(server_name))
+    for row in pbar:
+        pbar.set_description('Table {}'.format(row[3]))
+        insertOrUpdateTables(row[0],row[1],row[2],row[3], verbose = False)
+    return
+
+def fill_uniques(server_name, n_rows_gt = 0):
+    print('\n[', colored('OK', 'green'), ']', """\tCollecting the number of NULL values and 
+    \tthe number of unique data values. 
+    \tEach row represents a column of a table.\n""")
+    
+    pbar = tqdm(getTablesFromServer(server_name, n_rows_gt))
+    for row in pbar:
+        pbar.set_description('Table {} {:,} records'.format(row[3], row[4]))
+        insertOrUpdateUniques(row[0],row[1],row[2],row[3], verbose = False)
+    return
+
+def fill_data_values(server_name, n_rows_gt = 0, with_data_sample = False, n_samples = 10000):
+    print('\n[', colored('OK', 'green'), ']', """\tCollecting the frequency count of each data 
+    \tvalue of each columns up to a threshould of 5,000 
+    \tdistinct values by default.\n""")
+    
+    pbar = tqdm(getTablesFromServer(server_name, n_rows_gt))
+    for row in pbar:
+        pbar.set_description('Table {} {:,} records'.format(row[3], row[4]))
+        insertOrUpdateDataValues(row[0],row[1],row[2],row[3], verbose = False, with_data_sample=with_data_sample, n_samples=n_samples)
+    return
+
+def fill_dates(server_name, n_rows_gt = 0):
+    print('\n[', colored('OK', 'green'), ']', """\tCollecting monthly summary of columns of types 
+    \t'datetime', 'timestamp', or 'date'\n""")
+    
+    pbar = tqdm(getTablesFromServer(server_name, n_rows_gt))
+    for row in pbar:
+        pbar.set_description('Table {} {:,} records'.format(row[3], row[4]))
+        insertOrUpdateDates(row[0],row[1],row[2],row[3], verbose = False)
+    return
+
+def fill_stats(server_name, n_rows_gt = 0):
+    print('\n[', colored('OK', 'green'), ']', """\tCollecting Statistics of the numeric variables.\n""")
+    
+    pbar = tqdm(getTablesFromServer(server_name, n_rows_gt))
     for row in pbar:
         pbar.set_description('Table {} {:,} records'.format(row[3], row[4]))
         insertOrUpdateStats(row[0],row[1],row[2],row[3], verbose = False, level = 'two')
