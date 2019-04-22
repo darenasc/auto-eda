@@ -22,3 +22,8 @@ The metadata from the `source` database will be stored in a `metadata` database 
 * Clone or download the package.
 * Create a connection to a source database and another one to a metadata database.
 * Run `describe_database()` or `describe_table()` functions to get the metadata from the `source` using your connections.
+
+## To Do
+- [ ] Using samples in large tables.
+- [ ] Update frequencies at once after collecting all the distinct values.
+- [ ] Encapsulate SQL code and reference it by engine: 'sqlserver', 'mysql', 'postgres', 'sqlite', etc.
