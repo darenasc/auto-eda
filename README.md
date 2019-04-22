@@ -24,6 +24,7 @@ The metadata from the `source` database will be stored in a `metadata` database 
 * Run `describe_database()` or `describe_table()` functions to get the metadata from the `source` using your connections.
 
 ## To Do
-- [ ] Using samples in large tables.
+- [ ] Using samples for large tables.
 - [ ] Update frequencies at once after collecting all the distinct values.
 - [ ] Encapsulate SQL code and reference it by engine: 'sqlserver', 'mysql', 'postgres', 'sqlite', etc.
+- [ ] Add multithreading  processing to the queries.

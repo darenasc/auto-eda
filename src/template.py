@@ -858,13 +858,6 @@ def fill_stats(server_name):
         insertOrUpdateStats(row[0],row[1],row[2],row[3], verbose = False, level = 'two')
     return
 
-"""fill_columns('ODSQUERY')
-fill_tables('ODSQUERY')
-fill_uniques('ODSQUERY')
-fill_data_values('ODSQUERY')
-fill_dates('ODSQUERY')
-fill_stats('ODSQUERY')"""
-
 def describe_server(server_name):
     print('\n[', colored('OK', 'green'), ']', """\tCollecting metadata from {}""".format(server_name))
     fill_columns(server_name)
