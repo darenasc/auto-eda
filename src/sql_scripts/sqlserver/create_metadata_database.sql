@@ -20,6 +20,8 @@ CREATE TABLE [dbo].[tables](
 	[N_ROWS] [int] NULL
 )
 
+CREATE UNIQUE INDEX idx_tables ON tables ([SERVER_NAME], [TABLE_CATALOG], [TABLE_NAME]);
+
 CREATE TABLE [dbo].[uniques](
 	[SERVER_NAME] [varchar](255) NULL,
 	[TABLE_CATALOG] [varchar](255) NULL,
@@ -32,6 +34,8 @@ CREATE TABLE [dbo].[uniques](
 	[NULL_VALUES] [int] NULL
 )
 
+CREATE UNIQUE INDEX idx_uniques ON uniques ([SERVER_NAME], [TABLE_CATALOG], [TABLE_NAME], [COLUMN_NAME]);
+
 CREATE TABLE [dbo].[data_values](
 	[SERVER_NAME] [varchar](255) NULL,
 	[TABLE_CATALOG] [varchar](255) NULL,
@@ -43,6 +47,7 @@ CREATE TABLE [dbo].[data_values](
 	[FREQUENCY_PERCENTAGE] [float] NULL
 )
 
+CREATE UNIQUE INDEX idx_columns ON columns ([SERVER_NAME], [TABLE_CATALOG], [TABLE_NAME], [COLUMN_NAME], [DATA_VALUE]);
 CREATE INDEX idx_t_c_d ON data_values ([TABLE_NAME], [COLUMN_NAME], [DATA_VALUE]);
 
 CREATE TABLE [dbo].[dates](
@@ -55,6 +60,9 @@ CREATE TABLE [dbo].[dates](
 	[FREQUENCY_NUMBER] [int] NULL,
 	[FREQUENCY_PERCENTAGE] [float] NULL
 )
+
+CREATE UNIQUE INDEX idx_columns ON columns ([SERVER_NAME], [TABLE_CATALOG], [TABLE_NAME], [COLUMN_NAME], [DATA_VALUE]);
+CREATE INDEX idx_t_c_d ON dates ([TABLE_NAME], [COLUMN_NAME], [DATA_VALUE]);
 
 CREATE TABLE [dbo].[stats](
 	[SERVER_NAME] [varchar](255) NULL,
@@ -82,3 +90,5 @@ CREATE TABLE [dbo].[stats](
 	[P99] [float] NULL,
 	[IQR] [float] NULL
 )
+
+CREATE UNIQUE INDEX idx_stats ON stats ([SERVER_NAME], [TABLE_CATALOG], [TABLE_NAME], [COLUMN_NAME]);
