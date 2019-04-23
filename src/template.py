@@ -142,19 +142,38 @@ def close_db_cursor(cursor):
     cursor.close()
     return
 
-# Connection to the Source database.
-conn_source = get_db_connection(source_connection_params)
-print('[', colored('OK', 'green'), ']', '\tConnection established with source...')
-cursor_source = get_db_cursor(conn_source)
-print('[', colored('OK', 'green'), ']', '\tCursor aquired from source...')
+def test_source_connection(source_connection_params):
+    try:
+        conn_source = get_db_connection(source_connection_params)
+        print('[', colored('OK', 'green'), ']', '\tConnection to the source tested successfully...')
+        cursor_source = get_db_cursor(conn_source)
+        print('[', colored('OK', 'green'), ']', '\tCursor to the source tested successfully...')
+        return
+    except:
+        print('[', colored('Error', 'red'), ']', "\tCan't establish connection to the source database...")
+    finally:
+        cursor_source.close()
+        conn_source.close()
 
-# Connection to the Metadata database.
-conn_metadata = get_db_connection(metadata_connection_params)
-print('[', colored('OK', 'green'), ']', '\tConnection established with target...')
-cursor_metadata = conn_metadata.cursor()
-print('[', colored('OK', 'green'), ']', '\tCursor aquired from target...')
+def test_metadata_connection(metadata_connection_params):
+    try:
+        conn_metadata = get_db_connection(metadata_connection_params)
+        print('[', colored('OK', 'green'), ']', '\tConnection established to the metadata database...')
+        cursor_metadata = conn_metadata.cursor()
+        print('[', colored('OK', 'green'), ']', '\tCursor tested successfully to the metadata database...')
+    except:
+        print('[', colored('Error', 'red'), ']', "\tCan't establish connection to the metadata database...")
+    finally:
+        cursor_metadata.close()
+        conn_metadata.close()
+
+test_source_connection(source_connection_params)
+test_metadata_connection(metadata_connection_params)
 
 def getColumnsFromServer(server_name):
+    conn_metadata = get_db_connection(metadata_connection_params)
+    cursor_metadata = conn_metadata.cursor()
+    
     sql = """select distinct SERVER_NAME 
                 , TABLE_CATALOG 
                 , TABLE_SCHEMA 
@@ -162,9 +181,13 @@ def getColumnsFromServer(server_name):
                 from columns
                 where SERVER_NAME = ?;"""
     cursor_metadata.execute(sql, (server_name,))
-    return cursor_metadata.fetchall()
+    rows = cursor_metadata.fetchall()
+    
+    cursor_metadata.close()
+    conn_metadata.close()
+    return rows
 
-def insertOrUpdateColumns(server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type, verbose= False):
+def insertOrUpdateColumns(conn_metadata, cursor_metadata, server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type, verbose= False):
     def checkIfTableExistInColumns(server_name, table_catalog, table_schema, table_name, column_name):
         sql = """select * from columns
             WHERE SERVER_NAME = ?
@@ -190,7 +213,7 @@ def insertOrUpdateColumns(server_name, table_catalog, table_schema, table_name, 
     cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type))
     conn_metadata.commit()
     if verbose:
-        logger.info('{}.{}.{}.{}.{} has been updated into summary...'.format(server_name, table_catalog, table_schema, table_name, column_name))
+        logger.info('{}.{}.{}.{}.{} has been updated into columns...'.format(server_name, table_catalog, table_schema, table_name, column_name))
     return
 
 def insertOrUpdateTables(server_name, table_catalog, table_schema, table_name, verbose = False, ignore_views = True):
@@ -198,6 +221,12 @@ def insertOrUpdateTables(server_name, table_catalog, table_schema, table_name, v
     Stores the number of columns and the number of rows of the table.
     Each row is one table.
     """
+    conn_source = get_db_connection(source_connection_params)
+    cursor_source = get_db_cursor(conn_source)
+
+    conn_metadata = get_db_connection(metadata_connection_params)
+    cursor_metadata = conn_metadata.cursor()
+
     def checkIfTableExistInTables(server_name, table_catalog, table_schema, table_name):
         sql = """select * from tables
             WHERE SERVER_NAME = ?
@@ -260,10 +289,21 @@ def insertOrUpdateTables(server_name, table_catalog, table_schema, table_name, v
         
     if verbose:
         logger.info('{}.{}.{}.{} updated into tables...'.format(server_name, table_catalog, table_schema, table_name))
-        
+    
+    cursor_source.close()
+    conn_source.close()
+
+    cursor_metadata.close()
+    conn_metadata.close()
     return
 
 def insertOrUpdateUniques(server_name, table_catalog, table_schema, table_name, verbose = False):
+    conn_source = get_db_connection(source_connection_params)
+    cursor_source = get_db_cursor(conn_source)
+
+    conn_metadata = get_db_connection(metadata_connection_params)
+    cursor_metadata = conn_metadata.cursor()
+
     def checkIfTableExistInUniques(server_name, table_catalog, table_schema, table_name):
         sql = """select * from uniques
             WHERE SERVER_NAME = ?
@@ -318,13 +358,17 @@ def insertOrUpdateUniques(server_name, table_catalog, table_schema, table_name, 
             try:
                 insertValuesInUniques(server_name, table_catalog, table_schema, table_name, field[0], field[1], field[2], values[0][0], values[0][1])
             except:
-                #print('Problems with: {}.{}'.format(table_name, field[0]))
                 print('Problems with: {}.{}'.format(table_name, field[0]))
                 pass
 
         if verbose:
             logger.info('{}.{}.{}.{}.{} updated into summary_v3...'.format(server_name, table_catalog, table_schema, table_name, field[0]))
-            
+    
+    cursor_source.close()
+    conn_source.close()
+
+    cursor_metadata.close()
+    conn_metadata.close()
     return
 
 def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_name, verbose = False, threshold = 5000, with_data_sample = False, n_samples = 10000):
@@ -342,6 +386,12 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
     FREQUENCY_NUMBER 
     FREQUENCY_PERCENTAGE
     """
+    conn_metadata = get_db_connection(metadata_connection_params)
+    cursor_metadata = conn_metadata.cursor()
+
+    conn_source = get_db_connection(source_connection_params)
+    cursor_source = get_db_cursor(conn_source)
+
     def checkIfTableExistInDataValues(server_name, table_catalog, table_schema, table_name, column_name):
         sql = """select * from data_values
             WHERE SERVER_NAME = ?
@@ -480,6 +530,11 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
         if verbose:
             logger.info('{}.{}.{}.{}.{} updated into data_values...'.format(server_name, table_catalog, table_schema, table_name, column[4]))
     
+    cursor_source.close()
+    conn_source.close()
+
+    cursor_metadata.close()
+    conn_metadata.close()
     return
 
 def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, verbose = False, thresold = 5000):
@@ -498,6 +553,12 @@ def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, ve
     FREQUENCY_NUMBER 
     FREQUENCY_PERCENTAGE
     """
+    conn_metadata = get_db_connection(metadata_connection_params)
+    cursor_metadata = conn_metadata.cursor()
+
+    conn_source = get_db_connection(source_connection_params)
+    cursor_source = get_db_cursor(conn_source)
+
     def checkIfTableExistInDates(server_name, table_catalog, table_schema, table_name, column_name):
         sql = """select * from dates
             WHERE SERVER_NAME = ?
@@ -581,7 +642,6 @@ def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, ve
     
     columns = getDatetimeColumns(server_name, table_catalog, table_schema, table_name)
     pbar = tqdm(columns)
-    #for column in tqdm(columns, desc = 'Columns'):
     for column in pbar:
         pbar.set_description('Column %s' % column[4])
         if checkIfTableExistInDates(server_name, table_catalog, table_schema, table_name, column[4]) > 0:
@@ -600,9 +660,14 @@ def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, ve
         if verbose:
             logger.info('{}.{}.{}.{}.{} updated into dates...'.format(server_name, table_catalog, table_schema, table_name, column[4]))
     
+    cursor_source.close()
+    conn_source.close()
+
+    cursor_metadata.close()
+    conn_metadata.close()
     return
 
-def insertOrUpdateStats(server_name, table_catalog, table_schema, table_name, verbose = False, level = 'one'):
+def insertOrUpdateStats(server_name, table_catalog, table_schema, table_name, verbose = False, level = 'one', with_data_sample = False, n_samples = 10000):
     """
     Three levels:
     - one: only stats
@@ -631,6 +696,12 @@ def insertOrUpdateStats(server_name, table_catalog, table_schema, table_name, ve
     , P99 
     , IQR 
     """
+    conn_source = get_db_connection(source_connection_params)
+    cursor_source = get_db_cursor(conn_source)
+
+    conn_metadata = get_db_connection(metadata_connection_params)
+    cursor_metadata = conn_metadata.cursor()
+
     def checkIfTableExistInStats(server_name, table_catalog, table_schema, table_name, column_name):
         sql = """select * from stats
             WHERE SERVER_NAME = ?
@@ -656,8 +727,20 @@ def insertOrUpdateStats(server_name, table_catalog, table_schema, table_name, ve
         cursor_metadata.execute(sql_fields, (server_name, table_catalog, table_schema, table_name))
         return cursor_metadata.fetchall()
     
-    def insertBasicStats(server_name, table_catalog, table_schema, table_name, column_name):
-        sql_stats = """SELECT  AVG(CAST("{0}" as FLOAT)) AS AVG_
+    def insertBasicStats(server_name, table_catalog, table_schema, table_name, column_name, with_data_sample = False):
+        if SOURCE_ENGINE == 'mssqlserver' and with_data_sample:
+            sql_stats = """with t as ( SELECT * FROM {1}.{2}.{3} TABLESAMPLE ({4} ROWS) REPEATABLE ({5})
+                            )
+                            SELECT  AVG(CAST("{0}" as FLOAT)) AS AVG_
+                                , STDEV(CAST("{0}" as FLOAT)) as STDEV_
+                                , VAR(CAST("{0}" as FLOAT)) as VAR_
+                                , SUM(CAST("{0}" as FLOAT)) as SUM_
+                                , MAX(CAST("{0}" as FLOAT)) AS MAX_
+                                , MIN(CAST("{0}" as FLOAT)) AS MIN_
+                                , MAX(CAST("{0}" as FLOAT)) - MIN(CAST("{0}" as FLOAT)) as RANGE_
+                        FROM    t;""".format(column_name, table_catalog, table_schema, table_name, n_samples, 42)
+        else:
+            sql_stats = """SELECT  AVG(CAST("{0}" as FLOAT)) AS AVG_
                                 , STDEV(CAST("{0}" as FLOAT)) as STDEV_
                                 , VAR(CAST("{0}" as FLOAT)) as VAR_
                                 , SUM(CAST("{0}" as FLOAT)) as SUM_
@@ -719,7 +802,6 @@ def insertOrUpdateStats(server_name, table_catalog, table_schema, table_name, ve
     
     columns = getNumericColumnsFromTable(server_name, table_catalog, table_schema, table_name)
     pbar = tqdm(columns)
-    #for column in tqdm(columns, desc = 'Columns'):
     for column in pbar:
         pbar.set_description('Column %s' % column[4])
         if checkIfTableExistInStats(server_name, table_catalog, table_schema, table_name, column[4]):
@@ -745,6 +827,12 @@ def insertOrUpdateStats(server_name, table_catalog, table_schema, table_name, ve
         if verbose:
             logger.info('{}.{}.{}.{}.{} updated into stats...'.format(server_name, table_catalog, table_schema, table_name, column[4]))
     
+    cursor_source.close()
+    conn_source.close()
+
+    cursor_metadata.close()
+    conn_metadata.close()
+
     return
 
 def getTablesFromServer(server_name, n_rows_gt = 0):
@@ -752,6 +840,9 @@ def getTablesFromServer(server_name, n_rows_gt = 0):
     Given a server name, it will returns SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, and N_ROWS.
     This list can be used to go over each table and process it.
     """
+    conn_metadata = get_db_connection(metadata_connection_params)
+    cursor_metadata = conn_metadata.cursor()
+
     sql = """select distinct SERVER_NAME 
                 , TABLE_CATALOG 
                 , TABLE_SCHEMA 
@@ -762,9 +853,17 @@ def getTablesFromServer(server_name, n_rows_gt = 0):
                     and N_ROWS > {}
                 order by N_ROWS;""".format(n_rows_gt)
     cursor_metadata.execute(sql, (server_name,))
-    return cursor_metadata.fetchall()
+    rows = cursor_metadata.fetchall()
+
+    cursor_metadata.close()
+    conn_metadata.close()
+
+    return rows
 
 def fill_columns(server_name):
+    conn_source = get_db_connection(source_connection_params)
+    cursor_source = get_db_cursor(conn_source)
+
     print('\n[', colored('OK', 'green'), ']', """\tCollecting data about the:
     \tserver, catalog, database, table names, and column names. 
     \tEach row is a column of a table of the database.\n""")
@@ -784,23 +883,30 @@ def fill_columns(server_name):
     cursor_source.execute(sql, server_name)
     rows = cursor_source.fetchall()
 
+    cursor_source.close()
+    conn_source.close()
+
+    conn_metadata = get_db_connection(metadata_connection_params)
+    cursor_metadata = conn_metadata.cursor()
+
     for row in tqdm(rows, desc = 'Columns'):
         server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type = row
-        insertOrUpdateColumns(server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type)
+        insertOrUpdateColumns(conn_metadata, cursor_metadata, server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type)
+    
+    cursor_metadata.close()
+    conn_metadata.close()
+
     return
 
 def fill_tables(server_name):
-    """
-    TODO:
-    - add query times to the metadata about the table.
-    """
     print('\n[', colored('OK', 'green'), ']', """\tCollecting number of rows and columns of each table. 
     \tEach row is a table of the database.\n""")
-    
+
     pbar = tqdm(getColumnsFromServer(server_name))
     for row in pbar:
         pbar.set_description('Table {}'.format(row[3]))
         insertOrUpdateTables(row[0],row[1],row[2],row[3], verbose = False)
+    
     return
 
 def fill_uniques(server_name, n_rows_gt = 0):
