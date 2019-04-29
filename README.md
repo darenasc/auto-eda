@@ -25,7 +25,7 @@ The metadata from the `source` database will be stored in a `metadata` database 
 * Create two connections as described [here](docs/Connections.md) to a source database and to the metadata database.
     * Source database: This is the DB you want to explore. You don't need any additional information, just a valid connection to the database.
     * Metadata database: It can be created if not exists. This database will store the information from the source databases.
-* Edit the call of `describe_server(<YOUR_SERVER>)`.
+* Edit the two connection strings and then the call of `describe_server(<YOUR_SERVER>)` in [`explorer.py`](src/explorer.py).
 * Run it with `python explorer.py` 
 
 ## To Do
