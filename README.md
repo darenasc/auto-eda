@@ -19,10 +19,14 @@ Given two connections, a source and target database, it will collect metadata fo
 
 The metadata from the `source` database will be stored in a `metadata` database that it will be accesible for any visualization tool to explore it.
 
-## How To use AutoEda
+## How To use AutoEDADB
+
 * Clone or download the package.
-* Create a connection to a source database and another one to a metadata database.
-* Run `describe_database()` or `describe_table()` functions to get the metadata from the `source` using your connections.
+* Create two connections as described [here](docs/Connections.md) to a source database and to the metadata database.
+    * Source database: This is the DB you want to explore. You don't need any additional information, just a valid connection to the database.
+    * Metadata database: It can be created if not exists. This database will store the information from the source databases.
+* Edit the call of `describe_server(<YOUR_SERVER>)`.
+* Run it with `python explorer.py` 
 
 ## To Do
 - [x] Using samples for large tables.
