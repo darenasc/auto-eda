@@ -1,4 +1,6 @@
 # Auto-EDA
+[![DOI](https://zenodo.org/badge/132180123.svg)](https://zenodo.org/badge/latestdoi/132180123)
+
 Automated Exploratory Data Analysis. Simplifying Data Exploration.
 
 You can check some examples in the [documentation](docs/Documentation.md).
