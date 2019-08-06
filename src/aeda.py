@@ -1,5 +1,6 @@
 from __future__ import division
 import pyodbc
+import pymysql
 import sys
 import pandas as pd
 import numpy as np
@@ -9,6 +10,7 @@ import sqlite3
 from tqdm import tqdm
 import time
 from termcolor import colored
+from string_connections.sitewatch import DB_CONFIG
 
 FORMAT = '%(asctime)-15s %(message)s'
 logging.basicConfig(level=logging.INFO, format=FORMAT)
@@ -128,6 +130,17 @@ def get_db_connection(string_connection, verbose = False):
         logger.info('Connection string: {}'.format(connection_string))
     return connection
 
+def get_mysql_connection():
+    """
+    Connection to MySQL database.
+    ToDo:
+    - Make the connection from the string_connections folder.
+    server, db, user, password
+    """
+    #conn = pymysql.connect(host=server, port=port, user=user, passwd=password, db=db)
+    conn = pymysql.connect(**DB_CONFIG)
+    return conn
+
 def get_db_cursor(connection):
     return connection.cursor()
 
@@ -139,17 +152,25 @@ def close_db_cursor(cursor):
     cursor.close()
     return
 
+"""
 SOURCE_ENGINE = ''
 METADATA_ENGINE = ''
 source_connection_params = ''
 metadata_connection_params = ''
+"""
 
 def test_source_connection():
     try:
-        conn_source = get_db_connection(source_connection_params)
-        print('[', colored('OK', 'green'), ']', '\tConnection to the source tested successfully...')
-        cursor_source = get_db_cursor(conn_source)
-        print('[', colored('OK', 'green'), ']', '\tCursor to the source tested successfully...')
+        if SOURCE_ENGINE == 'mssqlserver':
+            conn_source = get_db_connection(source_connection_params)
+            print('[', colored('OK', 'green'), ']', '\tConnection to the source tested successfully...')
+            cursor_source = get_db_cursor(conn_source)
+            print('[', colored('OK', 'green'), ']', '\tCursor to the source tested successfully...')
+        elif SOURCE_ENGINE == 'mysql':
+            conn_source = get_mysql_connection()
+            print('[', colored('OK', 'green'), ']', '\tConnection to the source tested successfully...')
+            cursor_source = get_db_cursor(conn_source)
+            print('[', colored('OK', 'green'), ']', '\tCursor to the source tested successfully...')
         return
     except:
         print('[', colored('Error', 'red'), ']', "\tCan't establish connection to the source database...")
@@ -185,7 +206,7 @@ def setMetadataConnection(engine_type, connection_string):
     metadata_connection_params = connection_string
     return
 
-def getColumnsFromServer(server_name):
+def getColumnsFromServer(server_name, table_catalog, table_schema):
     conn_metadata = get_db_connection(metadata_connection_params)
     cursor_metadata = conn_metadata.cursor()
     
@@ -194,8 +215,10 @@ def getColumnsFromServer(server_name):
                 , TABLE_SCHEMA 
                 , TABLE_NAME
                 from columns
-                where SERVER_NAME = ?;"""
-    cursor_metadata.execute(sql, (server_name,))
+                where SERVER_NAME = ?
+                AND TABLE_CATALOG = ?
+                AND TABLE_SCHEMA = ?;"""
+    cursor_metadata.execute(sql, (server_name,table_catalog, table_schema))
     rows = cursor_metadata.fetchall()
     
     cursor_metadata.close()
@@ -206,25 +229,27 @@ def insertOrUpdateColumns(conn_metadata, cursor_metadata, server_name, table_cat
     def checkIfTableExistInColumns(server_name, table_catalog, table_schema, table_name, column_name):
         sql = """select * from columns
             WHERE SERVER_NAME = ?
-             AND TABLE_CATALOG = ?
-             AND TABLE_SCHEMA = ?
-             AND TABLE_NAME = ?
-             AND COLUMN_NAME = ?;"""
+            AND TABLE_CATALOG = ?
+            AND TABLE_SCHEMA = ?
+            AND TABLE_NAME = ?
+            AND COLUMN_NAME = ?;"""
+    
         cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name, column_name))
         return len(cursor_metadata.fetchall())
     
     if checkIfTableExistInColumns(server_name, table_catalog, table_schema, table_name, column_name):
         sql = """delete from columns
-                WHERE SERVER_NAME = ?
-                 AND TABLE_CATALOG = ?
-                 AND TABLE_SCHEMA = ?
-                 AND TABLE_NAME = ?
-                 AND COLUMN_NAME = ?;"""
+            WHERE SERVER_NAME = ?
+                AND TABLE_CATALOG = ?
+                AND TABLE_SCHEMA = ?
+                AND TABLE_NAME = ?
+                AND COLUMN_NAME = ?;"""
+    
         cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name, column_name))
         conn_metadata.commit()
     
     sql = """insert into columns (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE)
-             values (?, ?, ?, ?, ?, ?, ?)"""
+            values (?, ?, ?, ?, ?, ?, ?)"""
     cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type))
     conn_metadata.commit()
     if verbose:
@@ -236,7 +261,10 @@ def insertOrUpdateTables(server_name, table_catalog, table_schema, table_name, v
     Stores the number of columns and the number of rows of the table.
     Each row is one table.
     """
-    conn_source = get_db_connection(source_connection_params)
+    if SOURCE_ENGINE == 'mssqlserver':
+        conn_source = get_db_connection(source_connection_params)
+    elif SOURCE_ENGINE == 'mysql':
+        conn_source = get_mysql_connection()
     cursor_source = get_db_cursor(conn_source)
 
     conn_metadata = get_db_connection(metadata_connection_params)
@@ -252,7 +280,7 @@ def insertOrUpdateTables(server_name, table_catalog, table_schema, table_name, v
         return len(cursor_metadata.fetchall())
     
     def updateNumberOfRows(server_name, table_catalog, table_schema, table_name):
-        query = """select count(*) as n from {}.{}.{}""".format(table_catalog, table_schema, table_name)
+        query = """select count(*) as n from {}.{}""".format(table_schema, table_name)
         cursor_source.execute(query)
         num_rows = cursor_source.fetchone()
 
@@ -267,20 +295,36 @@ def insertOrUpdateTables(server_name, table_catalog, table_schema, table_name, v
         return 
     
     def updateNumberOfColumns(server_name, table_catalog, table_schema, table_name):
-        sql = """SELECT ? AS SERVER_NAME
-        , TABLE_CATALOG
-        , TABLE_SCHEMA
-        , TABLE_NAME
-        , COUNT(*) AS N_COLUMNS
-        , CAST(NULL as INTEGER) AS N_ROWS
-        FROM INFORMATION_SCHEMA.COLUMNS
-        WHERE TABLE_CATALOG = ?
-         AND TABLE_SCHEMA = ?
-         AND TABLE_NAME = ?
-        GROUP BY TABLE_CATALOG
-            , TABLE_SCHEMA
-            , TABLE_NAME
-        ORDER BY 1,2,3,4;"""
+        if SOURCE_ENGINE == 'mssqlserver':
+            sql = """SELECT ? AS SERVER_NAME
+                    , TABLE_CATALOG
+                    , TABLE_SCHEMA
+                    , TABLE_NAME
+                    , COUNT(*) AS N_COLUMNS
+                    , CAST(NULL as INTEGER) AS N_ROWS
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_CATALOG = ?
+                    AND TABLE_SCHEMA = ?
+                    AND TABLE_NAME = ?
+                    GROUP BY TABLE_CATALOG
+                        , TABLE_SCHEMA
+                        , TABLE_NAME
+                    ORDER BY 1,2,3,4;"""
+        elif SOURCE_ENGINE == 'mysql':
+            sql = """SELECT %s AS SERVER_NAME
+                    , TABLE_CATALOG
+                    , TABLE_SCHEMA
+                    , TABLE_NAME
+                    , COUNT(*) AS N_COLUMNS
+                    , NULL AS N_ROWS
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_CATALOG = %s
+                    AND TABLE_SCHEMA = %s
+                    AND TABLE_NAME = %s
+                    GROUP BY TABLE_CATALOG
+                        , TABLE_SCHEMA
+                        , TABLE_NAME
+                    ORDER BY 1,2,3,4;"""
         cursor_source.execute(sql, (server_name, table_catalog, table_schema, table_name))
         rows = cursor_source.fetchall()
         sql_insert = """insert into tables (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, N_COLUMNS, N_ROWS)
@@ -349,11 +393,14 @@ def insertOrUpdateUniques(server_name, table_catalog, table_schema, table_name, 
         return rows
     
     def getValuesFromColumn(server_name, table_catalog, table_schema, table_name, column_name):
-        conn_source = get_db_connection(source_connection_params)
+        if SOURCE_ENGINE == 'mssqlserver':
+            conn_source = get_db_connection(source_connection_params)
+        elif SOURCE_ENGINE == 'mysql':
+            conn_source = get_mysql_connection()
         cursor_source = get_db_cursor(conn_source)
 
-        sql_values = """select count(distinct "{}") as distinctValues
-                                , sum(case when "{}" is null then 1 else 0 end) as nullValues
+        sql_values = """select count(distinct `{}`) as distinctValues
+                                , sum(case when `{}` is null then 1 else 0 end) as nullValues
                         FROM    {}.{}""".format(column_name, column_name, table_schema, table_name)
         cursor_source.execute(sql_values)
         rows = cursor_source.fetchall()
@@ -468,7 +515,10 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
         return rows
     
     def insertFrequencyValue(server_name, table_catalog, table_schema, table_name, column_name, threshold, number_of_rows, with_data_sample = False, n_samples = 10000):
-        conn_source = get_db_connection(source_connection_params)
+        if SOURCE_ENGINE == 'mssqlserver':
+            conn_source = get_db_connection(source_connection_params)
+        elif SOURCE_ENGINE == 'mysql':
+            conn_source = get_mysql_connection()
         cursor_source = get_db_cursor(conn_source)
 
         conn_metadata = get_db_connection(metadata_connection_params)
@@ -486,13 +536,17 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
                                 FROM t
                                 GROUP BY t.[{0}] 
                                 ORDER BY N DESC;""".format(column_name, table_catalog, table_schema, table_name, n_samples, 42)
+            elif SOURCE_ENGINE == 'mysql':
+                sql_frequency = """SELECT `{0}` AS `{0}`
+                                    , COUNT(*) AS N 
+                                FROM {1}.{2} 
+                                GROUP BY `{0}`;""".format(column_name, table_schema, table_name)
             else:
                 sql_frequency = """SELECT [{0}]
                                     , COUNT(*) AS N 
                                 FROM {1}.{2}.{3} 
                                 GROUP BY [{0}] 
                                 ORDER BY N DESC;""".format(column_name, table_catalog, table_schema, table_name)
-
             cursor_source.execute(sql_frequency)
             rows = cursor_source.fetchall()
 
@@ -699,7 +753,10 @@ def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, ve
     conn_metadata = get_db_connection(metadata_connection_params)
     cursor_metadata = conn_metadata.cursor()
 
-    conn_source = get_db_connection(source_connection_params)
+    if SOURCE_ENGINE == 'mssqlserver':
+        conn_source = get_db_connection(source_connection_params)
+    elif SOURCE_ENGINE == 'mysql':
+        conn_source = get_mysql_connection()
     cursor_source = get_db_cursor(conn_source)
 
     def checkIfTableExistInDates(server_name, table_catalog, table_schema, table_name, column_name):
@@ -732,10 +789,16 @@ def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, ve
         This is working for MS SQL Server. 
         For other SQL engines this function should be implemented with their own date functions.
         """
-        sql_agg_month = """SELECT DATEFROMPARTS(YEAR({}), MONTH({}), 1) as date, count(*) as N 
+        if SOURCE_ENGINE == 'mssqlserver':
+            sql_agg_month = """SELECT DATEFROMPARTS(YEAR({}), MONTH({}), 1) as date, count(*) as N 
                             FROM {}.{}.{}
                             GROUP BY DATEFROMPARTS(YEAR({}), MONTH({}), 1)
                             ORDER BY N DESC;""".format(column_name, column_name, table_catalog, table_schema, table_name, column_name, column_name)
+        elif SOURCE_ENGINE == 'mysql':
+            sql_agg_month = """select makedate(extract(year from %s), DAYOFYEAR(%s)) as date
+                    , count(*) as N
+                    from %s.%s
+                    group by makedate(extract(year from %s), extract(month from %s));""" % (column_name, column_name, table_schema, table_name, column_name, column_name)
         try:
             cursor_source.execute(sql_agg_month)
             rows = cursor_source.fetchall()
@@ -981,7 +1044,7 @@ def insertOrUpdateStats(server_name, table_catalog, table_schema, table_name, ve
 
     return
 
-def getTablesFromServer(server_name, n_rows_gt = 0):
+def getTablesFromServer(server_name, table_catalog, table_schema, n_rows_gt = 0):
     """
     Given a server name, it will returns SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, and N_ROWS.
     This list can be used to go over each table and process it.
@@ -996,9 +1059,11 @@ def getTablesFromServer(server_name, n_rows_gt = 0):
                 , N_ROWS
                 from tables
                 where SERVER_NAME = ?
+                AND TABLE_CATALOG = ?
+                AND TABLE_SCHEMA = ?
                     and N_ROWS > {}
                 order by N_ROWS;""".format(n_rows_gt)
-    cursor_metadata.execute(sql, (server_name,))
+    cursor_metadata.execute(sql, (server_name, table_catalog, table_schema))
     rows = cursor_metadata.fetchall()
 
     cursor_metadata.close()
@@ -1006,27 +1071,49 @@ def getTablesFromServer(server_name, n_rows_gt = 0):
 
     return rows
 
-def fill_columns(server_name):
-    conn_source = get_db_connection(source_connection_params)
+def fill_columns(server_name, table_catalog, table_schema):
+    if SOURCE_ENGINE == 'mssqlserver':
+        conn_source = get_db_connection(source_connection_params)
+    elif SOURCE_ENGINE == 'mysql':
+        conn_source = get_mysql_connection()
     cursor_source = get_db_cursor(conn_source)
 
     print('\n[', colored('OK', 'green'), ']', """\tCollecting data about the:
     \tserver, catalog, database, table names, and column names. 
     \tEach row is a column of a table of the database.\n""")
-    sql = """SELECT ? AS SERVER_NAME
-            , C.TABLE_CATALOG
-            , C.TABLE_SCHEMA
-            , C.TABLE_NAME
-            , C.COLUMN_NAME
-            , C.ORDINAL_POSITION
-            , C.DATA_TYPE
-        FROM INFORMATION_SCHEMA.COLUMNS AS C INNER JOIN INFORMATION_SCHEMA.TABLES AS T
-        ON C.TABLE_CATALOG = T.TABLE_CATALOG
-        AND C.TABLE_SCHEMA = T.TABLE_SCHEMA
-        AND C.TABLE_NAME = T.TABLE_NAME
-        AND T.TABLE_TYPE = 'BASE TABLE';"""
+    if SOURCE_ENGINE == 'mssqlserver':
+        sql = """SELECT ? AS SERVER_NAME
+                , C.TABLE_CATALOG
+                , C.TABLE_SCHEMA
+                , C.TABLE_NAME
+                , C.COLUMN_NAME
+                , C.ORDINAL_POSITION
+                , C.DATA_TYPE
+            FROM INFORMATION_SCHEMA.COLUMNS AS C INNER JOIN INFORMATION_SCHEMA.TABLES AS T
+            ON C.TABLE_CATALOG = T.TABLE_CATALOG
+            AND C.TABLE_SCHEMA = T.TABLE_SCHEMA
+            AND C.TABLE_NAME = T.TABLE_NAME
+            AND T.TABLE_TYPE = 'BASE TABLE'
+            AND T.TABLE_CATALOG = ?
+            AND T.TABLE_SCHEMA = ?;"""
+    elif SOURCE_ENGINE == 'mysql':
+        sql = """SELECT %s AS SERVER_NAME
+                , C.TABLE_CATALOG
+                , C.TABLE_SCHEMA
+                , C.TABLE_NAME
+                , C.COLUMN_NAME
+                , C.ORDINAL_POSITION
+                , C.DATA_TYPE
+            FROM INFORMATION_SCHEMA.COLUMNS AS C INNER JOIN INFORMATION_SCHEMA.TABLES AS T
+            ON C.TABLE_CATALOG = T.TABLE_CATALOG
+            AND C.TABLE_SCHEMA = T.TABLE_SCHEMA
+            AND C.TABLE_NAME = T.TABLE_NAME
+            AND T.TABLE_TYPE = 'BASE TABLE'
+            AND T.TABLE_CATALOG = %s
+            AND T.TABLE_SCHEMA = %s;"""
 
-    cursor_source.execute(sql, server_name)
+
+    cursor_source.execute(sql, (server_name, table_catalog, table_schema))
     rows = cursor_source.fetchall()
 
     cursor_source.close()
@@ -1044,66 +1131,66 @@ def fill_columns(server_name):
 
     return
 
-def fill_tables(server_name):
+def fill_tables(server_name, table_catalog, table_schema):
     print('\n[', colored('OK', 'green'), ']', """\tCollecting number of rows and columns of each table. 
     \tEach row is a table of the database.\n""")
 
-    pbar = tqdm(getColumnsFromServer(server_name))
+    pbar = tqdm(getColumnsFromServer(server_name, table_catalog, table_schema))
     for row in pbar:
         pbar.set_description('Table {}'.format(row[3]))
         insertOrUpdateTables(row[0],row[1],row[2],row[3], verbose = False)
     
     return
 
-def fill_uniques(server_name, n_rows_gt = 0):
+def fill_uniques(server_name, table_catalog, table_schema, n_rows_gt = 0):
     print('\n[', colored('OK', 'green'), ']', """\tCollecting the number of NULL values and 
     \tthe number of unique data values. 
     \tEach row represents a column of a table.\n""")
     
-    pbar = tqdm(getTablesFromServer(server_name, n_rows_gt))
+    pbar = tqdm(getTablesFromServer(server_name, table_catalog, table_schema, n_rows_gt))
     for row in pbar:
         pbar.set_description('Table {} {:,} records'.format(row[3], row[4]))
         insertOrUpdateUniques(row[0],row[1],row[2],row[3], verbose = False)
     return
 
-def fill_data_values(server_name, n_rows_gt = 0, with_data_sample = False, n_samples = 10000):
+def fill_data_values(server_name, table_catalog, table_schema, n_rows_gt = 0, with_data_sample = False, n_samples = 10000):
     print('\n[', colored('OK', 'green'), ']', """\tCollecting the frequency count of each data 
     \tvalue of each columns up to a threshould of 5,000 
     \tdistinct values by default.\n""")
     
-    pbar = tqdm(getTablesFromServer(server_name, n_rows_gt))
+    pbar = tqdm(getTablesFromServer(server_name, table_catalog, table_schema, n_rows_gt))
     for row in pbar:
         pbar.set_description('Table {} {:,} records'.format(row[3], row[4]))
         insertOrUpdateDataValues(row[0],row[1],row[2],row[3], verbose = False, with_data_sample=with_data_sample, n_samples=n_samples)
     return
 
-def fill_dates(server_name, n_rows_gt = 0):
+def fill_dates(server_name, table_catalog, table_schema, n_rows_gt = 0):
     print('\n[', colored('OK', 'green'), ']', """\tCollecting monthly summary of columns of types 
     \t'datetime', 'timestamp', or 'date'\n""")
     
-    pbar = tqdm(getTablesFromServer(server_name, n_rows_gt))
+    pbar = tqdm(getTablesFromServer(server_name, table_catalog, table_schema, n_rows_gt))
     for row in pbar:
         pbar.set_description('Table {} {:,} records'.format(row[3], row[4]))
         insertOrUpdateDates(row[0],row[1],row[2],row[3], verbose = False)
     return
 
-def fill_stats(server_name, n_rows_gt = 0, with_data_sample = False):
+def fill_stats(server_name, table_catalog, table_schema, n_rows_gt = 0, with_data_sample = False):
     print('\n[', colored('OK', 'green'), ']', """\tCollecting Statistics from the numeric variables.\n""")
     
-    pbar = tqdm(getTablesFromServer(server_name, n_rows_gt))
+    pbar = tqdm(getTablesFromServer(server_name, table_catalog, table_schema, n_rows_gt))
     for row in pbar:
         pbar.set_description('Table {} {:,} records'.format(row[3], row[4]))
         insertOrUpdateStats(row[0],row[1],row[2],row[3], verbose = False, level = 'two')
     return
 
-def describe_server(server_name):
+def describe_server(server_name, table_catalog, table_schema):
     print('\n[', colored('OK', 'green'), ']', """\tCollecting metadata from {}""".format(server_name))
-    fill_columns(server_name)
-    fill_tables(server_name)
-    fill_uniques(server_name)
-    fill_data_values(servr_name)
-    fill_dates(server_name)
-    fill_stats(server_name)
+    fill_columns(server_name, table_catalog, table_schema)
+    fill_tables(server_name, table_catalog, table_schema)
+    fill_uniques(server_name, table_catalog, table_schema)
+    fill_data_values(server_name, table_catalog, table_schema)
+    fill_dates(server_name, table_catalog, table_schema)
+    fill_stats(server_name, table_catalog, table_schema)
     return
 
 ignore_columns = ['InsertETLLoadID', 'UpdateETLLoadID']
