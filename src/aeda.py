@@ -10,7 +10,9 @@ import sqlite3
 from tqdm import tqdm
 import time
 from termcolor import colored
-from string_connections.sitewatch import DB_CONFIG
+#from string_connections.sitewatch import DB_CONFIG
+from string_connections.connections import DB_META_CONFIG, DB_EMPLOYEE_CONFIG
+from string_connections.connections import DB_EMPLOYEE_CONFIG
 
 FORMAT = '%(asctime)-15s %(message)s'
 logging.basicConfig(level=logging.INFO, format=FORMAT)
@@ -121,6 +123,7 @@ def create_metadata_db(path, db_name):
 # Functions to connect to databases
 
 def get_db_connection(string_connection, verbose = False):
+
     with open(string_connection, 'r') as cs:
         connection_string = cs.read().replace('\n', '')
 
@@ -130,7 +133,7 @@ def get_db_connection(string_connection, verbose = False):
         logger.info('Connection string: {}'.format(connection_string))
     return connection
 
-def get_mysql_connection():
+def get_mysql_connection(db):
     """
     Connection to MySQL database.
     ToDo:
@@ -138,7 +141,10 @@ def get_mysql_connection():
     server, db, user, password
     """
     #conn = pymysql.connect(host=server, port=port, user=user, passwd=password, db=db)
-    conn = pymysql.connect(**DB_CONFIG)
+    if db == 'source':
+        conn = pymysql.connect(**DB_EMPLOYEE_CONFIG)
+    elif db == 'metadata':
+        conn = pymysql.connect(**DB_META_CONFIG)
     return conn
 
 def get_db_cursor(connection):
@@ -167,7 +173,7 @@ def test_source_connection():
             cursor_source = get_db_cursor(conn_source)
             print('[', colored('OK', 'green'), ']', '\tCursor to the source tested successfully...')
         elif SOURCE_ENGINE == 'mysql':
-            conn_source = get_mysql_connection()
+            conn_source = get_mysql_connection('source')
             print('[', colored('OK', 'green'), ']', '\tConnection to the source tested successfully...')
             cursor_source = get_db_cursor(conn_source)
             print('[', colored('OK', 'green'), ']', '\tCursor to the source tested successfully...')
@@ -180,10 +186,16 @@ def test_source_connection():
 
 def test_metadata_connection():
     try:
-        conn_metadata = get_db_connection(metadata_connection_params)
-        print('[', colored('OK', 'green'), ']', '\tConnection to the metadata database tested successfully...')
-        cursor_metadata = conn_metadata.cursor()
-        print('[', colored('OK', 'green'), ']', '\tCursor to the metadata database tested successfully...')
+        if SOURCE_ENGINE == 'mssqlserver':
+            conn_metadata = get_db_connection(metadata_connection_params)
+            print('[', colored('OK', 'green'), ']', '\tConnection to the metadata database tested successfully...')
+            cursor_metadata = conn_metadata.cursor('metadata')
+            print('[', colored('OK', 'green'), ']', '\tCursor to the metadata database tested successfully...')
+        elif SOURCE_ENGINE == 'mysql':
+            conn_metadata = get_mysql_connection('metadata')
+            print('[', colored('OK', 'green'), ']', '\tConnection to the metadata database tested successfully...')
+            cursor_metadata = get_db_cursor(conn_metadata)
+            print('[', colored('OK', 'green'), ']', '\tCursor to the metadata database tested successfully...')
     except:
         print('[', colored('Error', 'red'), ']', "\tCan't establish connection to the metadata database...")
     finally:
@@ -207,10 +219,9 @@ def setMetadataConnection(engine_type, connection_string):
     return
 
 def getColumnsFromServer(server_name, table_catalog, table_schema):
-    conn_metadata = get_db_connection(metadata_connection_params)
-    cursor_metadata = conn_metadata.cursor()
-    
-    sql = """select distinct SERVER_NAME 
+    if METADATA_ENGINE == 'mssqlserver':
+        conn_metadata = get_db_connection(metadata_connection_params)
+        sql = """select distinct SERVER_NAME 
                 , TABLE_CATALOG 
                 , TABLE_SCHEMA 
                 , TABLE_NAME
@@ -218,6 +229,18 @@ def getColumnsFromServer(server_name, table_catalog, table_schema):
                 where SERVER_NAME = ?
                 AND TABLE_CATALOG = ?
                 AND TABLE_SCHEMA = ?;"""
+    elif METADATA_ENGINE == 'mysql':
+        conn_metadata = get_mysql_connection('metadata')
+        sql = """select distinct SERVER_NAME 
+                , TABLE_CATALOG 
+                , TABLE_SCHEMA 
+                , TABLE_NAME
+                from columns
+                where SERVER_NAME = %s
+                AND TABLE_CATALOG = %s
+                AND TABLE_SCHEMA = %s;"""
+    
+    cursor_metadata = conn_metadata.cursor()
     cursor_metadata.execute(sql, (server_name,table_catalog, table_schema))
     rows = cursor_metadata.fetchall()
     
@@ -227,29 +250,49 @@ def getColumnsFromServer(server_name, table_catalog, table_schema):
 
 def insertOrUpdateColumns(conn_metadata, cursor_metadata, server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type, verbose= False):
     def checkIfTableExistInColumns(server_name, table_catalog, table_schema, table_name, column_name):
-        sql = """select * from columns
-            WHERE SERVER_NAME = ?
-            AND TABLE_CATALOG = ?
-            AND TABLE_SCHEMA = ?
-            AND TABLE_NAME = ?
-            AND COLUMN_NAME = ?;"""
+        if METADATA_ENGINE == 'mssqlserver':
+            sql = """select * from columns
+                WHERE SERVER_NAME = ?
+                AND TABLE_CATALOG = ?
+                AND TABLE_SCHEMA = ?
+                AND TABLE_NAME = ?
+                AND COLUMN_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            sql = """select * from columns
+                WHERE SERVER_NAME = %s
+                AND TABLE_CATALOG = %s
+                AND TABLE_SCHEMA = %s
+                AND TABLE_NAME = %s
+                AND COLUMN_NAME = %s;"""
     
         cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name, column_name))
         return len(cursor_metadata.fetchall())
     
     if checkIfTableExistInColumns(server_name, table_catalog, table_schema, table_name, column_name):
-        sql = """delete from columns
-            WHERE SERVER_NAME = ?
-                AND TABLE_CATALOG = ?
-                AND TABLE_SCHEMA = ?
-                AND TABLE_NAME = ?
-                AND COLUMN_NAME = ?;"""
+        if METADATA_ENGINE == 'mssqlserver':
+            sql = """delete from columns
+                WHERE SERVER_NAME = ?
+                    AND TABLE_CATALOG = ?
+                    AND TABLE_SCHEMA = ?
+                    AND TABLE_NAME = ?
+                    AND COLUMN_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            sql = """delete from columns
+                WHERE SERVER_NAME = %s
+                    AND TABLE_CATALOG = %s
+                    AND TABLE_SCHEMA = %s
+                    AND TABLE_NAME = %s
+                    AND COLUMN_NAME = %s;"""
     
         cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name, column_name))
         conn_metadata.commit()
     
-    sql = """insert into columns (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE)
-            values (?, ?, ?, ?, ?, ?, ?)"""
+    if METADATA_ENGINE == 'mssqlserver':
+        sql = """insert into columns (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE)
+                values (?, ?, ?, ?, ?, ?, ?)"""
+    elif METADATA_ENGINE == 'mysql':
+        sql = """insert into columns (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE)
+                values (%s, %s, %s, %s, %s, %s, %s)"""
     cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type))
     conn_metadata.commit()
     if verbose:
@@ -264,32 +307,53 @@ def insertOrUpdateTables(server_name, table_catalog, table_schema, table_name, v
     if SOURCE_ENGINE == 'mssqlserver':
         conn_source = get_db_connection(source_connection_params)
     elif SOURCE_ENGINE == 'mysql':
-        conn_source = get_mysql_connection()
+        conn_source = get_mysql_connection('source')
     cursor_source = get_db_cursor(conn_source)
 
-    conn_metadata = get_db_connection(metadata_connection_params)
+    if METADATA_ENGINE == 'mssqlserver':
+        conn_metadata = get_db_connection(metadata_connection_params)
+    elif METADATA_ENGINE == 'mysql':
+        conn_metadata = get_mysql_connection('metadata')
     cursor_metadata = conn_metadata.cursor()
 
     def checkIfTableExistInTables(server_name, table_catalog, table_schema, table_name):
-        sql = """select * from tables
-            WHERE SERVER_NAME = ?
-             AND TABLE_CATALOG = ?
-             AND TABLE_SCHEMA = ?
-             AND TABLE_NAME = ?;"""
+        if METADATA_ENGINE == 'mssqlserver':
+            sql = """select * from tables
+                WHERE SERVER_NAME = ?
+                AND TABLE_CATALOG = ?
+                AND TABLE_SCHEMA = ?
+                AND TABLE_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            sql = """select * from tables
+                WHERE SERVER_NAME = %s
+                AND TABLE_CATALOG = %s
+                AND TABLE_SCHEMA = %s
+                AND TABLE_NAME = %s;"""
         cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name))
         return len(cursor_metadata.fetchall())
     
     def updateNumberOfRows(server_name, table_catalog, table_schema, table_name):
-        query = """select count(*) as n from {}.{}""".format(table_schema, table_name)
+        if METADATA_ENGINE == 'mssqlserver':
+            query = """select count(*) as n from {}.{}""".format(table_schema, table_name)
+        elif METADATA_ENGINE == 'mysql':
+            query = """select count(*) as n from {}.{}""".format(table_schema, table_name)
         cursor_source.execute(query)
         num_rows = cursor_source.fetchone()
 
-        sql_update = """UPDATE tables 
-                        SET N_ROWS = ? 
-                        WHERE SERVER_NAME = ?
-                         AND TABLE_CATALOG = ?
-                         AND TABLE_SCHEMA = ?
-                         AND TABLE_NAME = ?;"""
+        if METADATA_ENGINE == 'mssqlserver':
+            sql_update = """UPDATE tables 
+                            SET N_ROWS = ? 
+                            WHERE SERVER_NAME = ?
+                            AND TABLE_CATALOG = ?
+                            AND TABLE_SCHEMA = ?
+                            AND TABLE_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            sql_update = """UPDATE tables 
+                            SET N_ROWS = %s
+                            WHERE SERVER_NAME = %s
+                            AND TABLE_CATALOG = %s
+                            AND TABLE_SCHEMA = %s
+                            AND TABLE_NAME = %s;"""
         cursor_metadata.execute(sql_update, (num_rows[0], server_name, table_catalog, table_schema, table_name))
         conn_metadata.commit()
         return 
@@ -327,19 +391,30 @@ def insertOrUpdateTables(server_name, table_catalog, table_schema, table_name, v
                     ORDER BY 1,2,3,4;"""
         cursor_source.execute(sql, (server_name, table_catalog, table_schema, table_name))
         rows = cursor_source.fetchall()
-        sql_insert = """insert into tables (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, N_COLUMNS, N_ROWS)
-                        values (?, ?, ?, ?, ?, ?);"""
+        if METADATA_ENGINE == 'mssqlserver':
+            sql_insert = """insert into tables (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, N_COLUMNS, N_ROWS)
+                            values (?, ?, ?, ?, ?, ?);"""
+        elif METADATA_ENGINE == 'mysql':
+            sql_insert = """insert into tables (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, N_COLUMNS, N_ROWS)
+                            values (%s, %s, %s, %s, %s, %s);"""
         for row in rows:
             cursor_metadata.execute(sql_insert, (row[0], row[1], row[2], row[3], row[4], row[5]))
             conn_metadata.commit()
         return
     
     if checkIfTableExistInTables:
-        sql = """delete from tables
-                WHERE SERVER_NAME = ?
-                 AND TABLE_CATALOG = ?
-                 AND TABLE_SCHEMA = ?
-                 AND TABLE_NAME = ?;"""
+        if METADATA_ENGINE == 'mssqlserver':
+            sql = """delete from tables
+                    WHERE SERVER_NAME = ?
+                    AND TABLE_CATALOG = ?
+                    AND TABLE_SCHEMA = ?
+                    AND TABLE_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            sql = """delete from tables
+                    WHERE SERVER_NAME = %s
+                    AND TABLE_CATALOG = %s
+                    AND TABLE_SCHEMA = %s
+                    AND TABLE_NAME = %s;"""
         cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name))
         conn_metadata.commit()
         
@@ -358,14 +433,21 @@ def insertOrUpdateTables(server_name, table_catalog, table_schema, table_name, v
 
 def insertOrUpdateUniques(server_name, table_catalog, table_schema, table_name, verbose = False):
     def checkIfTableExistInUniques(server_name, table_catalog, table_schema, table_name):
-        conn_metadata = get_db_connection(metadata_connection_params)
-        cursor_metadata = conn_metadata.cursor()
-
-        sql = """select * from uniques
+        if METADATA_ENGINE == 'mssqlserver':
+            conn_metadata = get_db_connection(metadata_connection_params)
+            sql = """select * from uniques
             WHERE SERVER_NAME = ?
              AND TABLE_CATALOG = ?
              AND TABLE_SCHEMA = ?
              AND TABLE_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            conn_metadata = get_mysql_connection('metadata')
+            sql = """select * from uniques
+            WHERE SERVER_NAME = %s
+             AND TABLE_CATALOG = %s
+             AND TABLE_SCHEMA = %s
+             AND TABLE_NAME = %s;"""
+        cursor_metadata = conn_metadata.cursor()
         cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name))
         len_uniques = len(cursor_metadata.fetchall())
 
@@ -374,10 +456,9 @@ def insertOrUpdateUniques(server_name, table_catalog, table_schema, table_name, 
         return len_uniques
     
     def getColumnsFromTable(server_name, table_catalog, table_schema, table_name):
-        conn_metadata = get_db_connection(metadata_connection_params)
-        cursor_metadata = conn_metadata.cursor()
-
-        sql_fields = """select column_name
+        if METADATA_ENGINE == 'mssqlserver':
+            conn_metadata = get_db_connection(metadata_connection_params)
+            sql_fields = """select column_name
                             , ORDINAL_POSITION
                             , DATA_TYPE 
                         from columns
@@ -385,6 +466,18 @@ def insertOrUpdateUniques(server_name, table_catalog, table_schema, table_name, 
                          AND TABLE_CATALOG = ?
                          AND TABLE_SCHEMA = ?
                          AND TABLE_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            conn_metadata = get_mysql_connection('metadata')
+            sql_fields = """select column_name
+                            , ORDINAL_POSITION
+                            , DATA_TYPE 
+                        from columns
+                        WHERE SERVER_NAME = %s
+                         AND TABLE_CATALOG = %s
+                         AND TABLE_SCHEMA = %s
+                         AND TABLE_NAME = %s;"""
+
+        cursor_metadata = conn_metadata.cursor()
         cursor_metadata.execute(sql_fields, (server_name, table_catalog, table_schema, table_name))
         rows = cursor_metadata.fetchall()
 
@@ -396,7 +489,7 @@ def insertOrUpdateUniques(server_name, table_catalog, table_schema, table_name, 
         if SOURCE_ENGINE == 'mssqlserver':
             conn_source = get_db_connection(source_connection_params)
         elif SOURCE_ENGINE == 'mysql':
-            conn_source = get_mysql_connection()
+            conn_source = get_mysql_connection('source')
         cursor_source = get_db_cursor(conn_source)
 
         sql_values = """select count(distinct `{}`) as distinctValues
@@ -411,11 +504,16 @@ def insertOrUpdateUniques(server_name, table_catalog, table_schema, table_name, 
         return rows
     
     def insertValuesInUniques(server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type, distinctValues, nullValues):
-        conn_metadata = get_db_connection(metadata_connection_params)
+        if METADATA_ENGINE == 'mssqlserver':
+            conn_metadata = get_db_connection(metadata_connection_params)
+            sql_insert = """insert into uniques (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE, DISTINCT_VALUES, NULL_VALUES)
+                        values (?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+        elif METADATA_ENGINE == 'mysql':
+            conn_metadata = get_mysql_connection('metadata')
+            sql_insert = """insert into uniques (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE, DISTINCT_VALUES, NULL_VALUES)
+                        values (%s, %s, %s, %s, %s, %s, %s, %s, %s)"""
         cursor_metadata = conn_metadata.cursor()
 
-        sql_insert = """insert into uniques (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION, DATA_TYPE, DISTINCT_VALUES, NULL_VALUES)
-                        values (?, ?, ?, ?, ?, ?, ?, ?, ?)"""
         cursor_metadata.execute(sql_insert, (server_name, table_catalog, table_schema, table_name, column_name, ordinal_position, data_type, distinctValues, nullValues))
         conn_metadata.commit()
 
@@ -424,14 +522,22 @@ def insertOrUpdateUniques(server_name, table_catalog, table_schema, table_name, 
         return
     
     def deleteExistingRows(server_name, table_catalog, table_schema, table_name):
-        conn_metadata = get_db_connection(metadata_connection_params)
-        cursor_metadata = conn_metadata.cursor()
-
-        sql = """delete from uniques
+        if METADATA_ENGINE == 'mssqlserver':
+            conn_metadata = get_db_connection(metadata_connection_params)
+            sql = """delete from uniques
                 WHERE SERVER_NAME = ?
                  AND TABLE_CATALOG = ?
                  AND TABLE_SCHEMA = ?
                  AND TABLE_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            conn_metadata = get_mysql_connection('metadata')
+            sql = """delete from uniques
+                WHERE SERVER_NAME = %s
+                 AND TABLE_CATALOG = %s
+                 AND TABLE_SCHEMA = %s
+                 AND TABLE_NAME = %s;"""
+        cursor_metadata = conn_metadata.cursor()
+
         cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name))
         conn_metadata.commit()
 
@@ -476,15 +582,24 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
     FREQUENCY_PERCENTAGE
     """
     def checkIfTableExistInDataValues(server_name, table_catalog, table_schema, table_name, column_name):
-        conn_metadata = get_db_connection(metadata_connection_params)
+        if METADATA_ENGINE == 'mssqlserver':
+            conn_metadata = get_db_connection(metadata_connection_params)
+            sql = """select * from data_values
+                WHERE SERVER_NAME = ?
+                AND TABLE_CATALOG = ?
+                AND TABLE_SCHEMA = ?
+                AND TABLE_NAME = ?
+                AND COLUMN_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            conn_metadata = get_mysql_connection('metadata')
+            sql = """select * from data_values
+                WHERE SERVER_NAME = %s
+                AND TABLE_CATALOG = %s
+                AND TABLE_SCHEMA = %s
+                AND TABLE_NAME = %s
+                AND COLUMN_NAME = %s;"""
         cursor_metadata = conn_metadata.cursor()
 
-        sql = """select * from data_values
-            WHERE SERVER_NAME = ?
-             AND TABLE_CATALOG = ?
-             AND TABLE_SCHEMA = ?
-             AND TABLE_NAME = ?
-             AND COLUMN_NAME = ?;"""
         cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name, column_name))
         num_rows = len(cursor_metadata.fetchall())
 
@@ -493,20 +608,34 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
         return num_rows
     
     def getColumnsFromTable(server_name, table_catalog, table_schema, table_name):
-        conn_metadata = get_db_connection(metadata_connection_params)
+        if METADATA_ENGINE == 'mssqlserver':
+            conn_metadata = get_db_connection(metadata_connection_params)
+            sql_fields = """select server_name
+                                , table_catalog
+                                , table_schema
+                                , table_name
+                                , column_name
+                            from columns
+                            WHERE SERVER_NAME = ?
+                            AND TABLE_CATALOG = ?
+                            AND TABLE_SCHEMA = ?
+                            AND TABLE_NAME = ?
+                            AND DATA_TYPE NOT IN ('text', 'image', 'ntext', 'blob', 'varbinary');"""
+        elif METADATA_ENGINE == 'mysql':
+            conn_metadata = get_mysql_connection('metadata')
+            sql_fields = """select server_name
+                                , table_catalog
+                                , table_schema
+                                , table_name
+                                , column_name
+                            from columns
+                            WHERE SERVER_NAME = %s
+                            AND TABLE_CATALOG = %s
+                            AND TABLE_SCHEMA = %s
+                            AND TABLE_NAME = %s
+                            AND DATA_TYPE NOT IN ('text', 'image', 'ntext', 'blob', 'varbinary');"""
         cursor_metadata = conn_metadata.cursor()
 
-        sql_fields = """select server_name
-                            , table_catalog
-                            , table_schema
-                            , table_name
-                            , column_name
-                        from columns
-                        WHERE SERVER_NAME = ?
-                         AND TABLE_CATALOG = ?
-                         AND TABLE_SCHEMA = ?
-                         AND TABLE_NAME = ?
-                         AND DATA_TYPE NOT IN ('text', 'image', 'ntext', 'blob', 'varbinary');"""
         cursor_metadata.execute(sql_fields, (server_name, table_catalog, table_schema, table_name))
         rows = cursor_metadata.fetchall()
 
@@ -518,10 +647,13 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
         if SOURCE_ENGINE == 'mssqlserver':
             conn_source = get_db_connection(source_connection_params)
         elif SOURCE_ENGINE == 'mysql':
-            conn_source = get_mysql_connection()
+            conn_source = get_mysql_connection('source')
         cursor_source = get_db_cursor(conn_source)
 
-        conn_metadata = get_db_connection(metadata_connection_params)
+        if METADATA_ENGINE == 'mssqlserver':
+            conn_metadata = get_db_connection(metadata_connection_params)
+        elif METADATA_ENGINE == 'mysql':
+            conn_metadata = get_mysql_connection('metadata')
         cursor_metadata = conn_metadata.cursor()
         
         num_distinct_values = getNumDistinctValues(server_name, table_catalog, table_schema, table_name, column_name)
@@ -553,8 +685,12 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
             pbar = tqdm(rows)
             for row in pbar:
                 pbar.set_description('Distinct values')
-                sql_insert = """insert into data_values (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_VALUE, FREQUENCY_NUMBER)
-                                values (?, ?, ?, ?, ?, ?, ?);"""
+                if METADATA_ENGINE == 'mssqlserver':
+                    sql_insert = """insert into data_values (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_VALUE, FREQUENCY_NUMBER)
+                                    values (?, ?, ?, ?, ?, ?, ?);"""
+                elif METADATA_ENGINE == 'mysql':
+                    sql_insert = """insert into data_values (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_VALUE, FREQUENCY_NUMBER)
+                                    values (%s, %s, %s, %s, %s, %s, %s);"""
                 try:
                     if isinstance(row[0], str):
                         cursor_metadata.execute(sql_insert, (server_name, table_catalog, table_schema, table_name, column_name, row[0], row[1]))
@@ -562,7 +698,7 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
                         cursor_metadata.execute(sql_insert, (server_name, table_catalog, table_schema, table_name, column_name, str(row[0]), row[1]))
                     conn_metadata.commit()
                 except:
-                    #print('\nProblems with {}.{}'.format(table_name, column_name))
+                    print('\nProblems with {}.{}'.format(table_name, column_name))
                     pass
         cursor_source.close()
         conn_source.close()
@@ -618,7 +754,7 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
                         cursor_metadata.execute(sql_update)
                     conn_metadata.commit()
                 except:
-                    #print('\nProblems with {}.{}'.format(table_name, column_name))
+                    print('\nProblems with {}.{}'.format(table_name, column_name))
                     pass
         cursor_source.close()
         conn_source.close()
@@ -668,31 +804,52 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
         return
     
     def getNumDistinctValues(server_name, table_catalog, table_schema, table_name, column_name):
-        conn_metadata = get_db_connection(metadata_connection_params)
+        if METADATA_ENGINE == 'mssqlserver':
+            conn_metadata = get_db_connection(metadata_connection_params)
+            sql_check_threshold = """select DISTINCT_VALUES from uniques 
+                                    where SERVER_NAME = ?
+                                        AND TABLE_CATALOG = ?
+                                        AND TABLE_SCHEMA = ?
+                                        AND TABLE_NAME = ?
+                                        AND COLUMN_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            conn_metadata = get_mysql_connection('metadata')
+            sql_check_threshold = """select DISTINCT_VALUES from uniques 
+                                    where SERVER_NAME = %s
+                                        AND TABLE_CATALOG = %s
+                                        AND TABLE_SCHEMA = %s
+                                        AND TABLE_NAME = %s
+                                        AND COLUMN_NAME = %s;"""
         cursor_metadata = conn_metadata.cursor()
 
-        sql_check_threshold = """select DISTINCT_VALUES from uniques 
-                                 where SERVER_NAME = ?
-                                     AND TABLE_CATALOG = ?
-                                     AND TABLE_SCHEMA = ?
-                                     AND TABLE_NAME = ?
-                                     AND COLUMN_NAME = ?;"""
         cursor_metadata.execute(sql_check_threshold, (server_name, table_catalog, table_schema, table_name, column_name))
         rows = cursor_metadata.fetchone()
 
         cursor_metadata.close()
         conn_metadata.close()
+        #if rows == None:
+        #    return 0
+        #else:
+        #print(rows[0])
         return rows[0]
         
     def getNumberOfRows(server_name, table_catalog, table_schema, table_name):
-        conn_metadata = get_db_connection(metadata_connection_params)
+        if METADATA_ENGINE == 'mssqlserver':
+            conn_metadata = get_db_connection(metadata_connection_params)
+            sql = """select N_ROWS from tables
+                    WHERE SERVER_NAME = ?
+                        AND TABLE_CATALOG = ?
+                        AND TABLE_SCHEMA = ?
+                        AND TABLE_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            conn_metadata = get_mysql_connection('metadata')
+            sql = """select N_ROWS from tables
+                    WHERE SERVER_NAME = %s
+                        AND TABLE_CATALOG = %s
+                        AND TABLE_SCHEMA = %s
+                        AND TABLE_NAME = %s;"""
         cursor_metadata = conn_metadata.cursor()
 
-        sql = """select N_ROWS from tables
-                WHERE SERVER_NAME = ?
-                    AND TABLE_CATALOG = ?
-                    AND TABLE_SCHEMA = ?
-                    AND TABLE_NAME = ?;"""
         cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name))
         num_rows = cursor_metadata.fetchall()[0][0]
 
@@ -701,15 +858,24 @@ def insertOrUpdateDataValues(server_name, table_catalog, table_schema, table_nam
         return num_rows
 
     def deleteExistingRows(server_name, table_catalog, table_schema, table_name, column_name):
-        conn_metadata = get_db_connection(metadata_connection_params)
+        if METADATA_ENGINE == 'mssqlserver':
+            conn_metadata = get_db_connection(metadata_connection_params)
+            sql_delete = """delete from data_values
+                        WHERE SERVER_NAME = ?
+                        AND TABLE_CATALOG = ?
+                        AND TABLE_SCHEMA = ?
+                        AND TABLE_NAME = ?
+                        AND COLUMN_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            conn_metadata = get_mysql_connection('metadata')
+            sql_delete = """delete from data_values
+                        WHERE SERVER_NAME = %s
+                        AND TABLE_CATALOG = %s
+                        AND TABLE_SCHEMA = %s
+                        AND TABLE_NAME = %s
+                        AND COLUMN_NAME = %s;"""
         cursor_metadata = conn_metadata.cursor()
 
-        sql_delete = """delete from data_values
-                    WHERE SERVER_NAME = ?
-                     AND TABLE_CATALOG = ?
-                     AND TABLE_SCHEMA = ?
-                     AND TABLE_NAME = ?
-                     AND COLUMN_NAME = ?;"""
         cursor_metadata.execute(sql_delete, (server_name, table_catalog, table_schema, table_name, column_name))
         conn_metadata.commit()
 
@@ -750,37 +916,61 @@ def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, ve
     FREQUENCY_NUMBER 
     FREQUENCY_PERCENTAGE
     """
-    conn_metadata = get_db_connection(metadata_connection_params)
+    if METADATA_ENGINE == 'mssqlserver':
+        conn_metadata = get_db_connection(metadata_connection_params)
+    elif METADATA_ENGINE == 'mysql':
+        conn_metadata = get_mysql_connection('metadata')
     cursor_metadata = conn_metadata.cursor()
 
     if SOURCE_ENGINE == 'mssqlserver':
         conn_source = get_db_connection(source_connection_params)
     elif SOURCE_ENGINE == 'mysql':
-        conn_source = get_mysql_connection()
+        conn_source = get_mysql_connection('source')
     cursor_source = get_db_cursor(conn_source)
 
     def checkIfTableExistInDates(server_name, table_catalog, table_schema, table_name, column_name):
-        sql = """select * from dates
-            WHERE SERVER_NAME = ?
-             AND TABLE_CATALOG = ?
-             AND TABLE_SCHEMA = ?
-             AND TABLE_NAME = ?
-             AND COLUMN_NAME = ?;"""
+        if METADATA_ENGINE == 'mssqlserver':
+            sql = """select * from dates
+                WHERE SERVER_NAME = ?
+                AND TABLE_CATALOG = ?
+                AND TABLE_SCHEMA = ?
+                AND TABLE_NAME = ?
+                AND COLUMN_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            sql = """select * from dates
+                WHERE SERVER_NAME = %s
+                AND TABLE_CATALOG = %s
+                AND TABLE_SCHEMA = %s
+                AND TABLE_NAME = %s
+                AND COLUMN_NAME = %s;"""
         cursor_metadata.execute(sql, (server_name, table_catalog, table_schema, table_name, column_name))
         return len(cursor_metadata.fetchall())
     
     def getDatetimeColumns(server_name, table_catalog, table_schema, table_name):
-        sql_datetimes = """select server_name
-                            , table_catalog
-                            , table_schema
-                            , table_name
-                            , column_name
-                            from columns 
-                            WHERE SERVER_NAME = ?
-                             AND TABLE_CATALOG = ?
-                             AND TABLE_SCHEMA = ?
-                             AND TABLE_NAME = ?
-                             AND DATA_TYPE IN ('datetime', 'timestamp', 'date', 'datetime2', 'smalldatetime');"""
+        if METADATA_ENGINE == 'mssqlserver':
+            sql_datetimes = """select server_name
+                                , table_catalog
+                                , table_schema
+                                , table_name
+                                , column_name
+                                from columns 
+                                WHERE SERVER_NAME = ?
+                                AND TABLE_CATALOG = ?
+                                AND TABLE_SCHEMA = ?
+                                AND TABLE_NAME = ?
+                                AND DATA_TYPE IN ('datetime', 'timestamp', 'date', 'datetime2', 'smalldatetime');"""
+        elif METADATA_ENGINE == 'mysql':
+            sql_datetimes = """select server_name
+                                , table_catalog
+                                , table_schema
+                                , table_name
+                                , column_name
+                                from columns 
+                                WHERE SERVER_NAME = %s
+                                AND TABLE_CATALOG = %s
+                                AND TABLE_SCHEMA = %s
+                                AND TABLE_NAME = %s
+                                AND DATA_TYPE IN ('datetime', 'timestamp', 'date', 'datetime2', 'smalldatetime');"""
         cursor_metadata.execute(sql_datetimes, (server_name, table_catalog, table_schema, table_name))
         return cursor_metadata.fetchall()
     
@@ -795,17 +985,23 @@ def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, ve
                             GROUP BY DATEFROMPARTS(YEAR({}), MONTH({}), 1)
                             ORDER BY N DESC;""".format(column_name, column_name, table_catalog, table_schema, table_name, column_name, column_name)
         elif SOURCE_ENGINE == 'mysql':
-            sql_agg_month = """select makedate(extract(year from %s), DAYOFYEAR(%s)) as date
+            sql_agg_month = """select makedate(extract(year from `{0}`), DAYOFYEAR(`{0}`)) as date
                     , count(*) as N
-                    from %s.%s
-                    group by makedate(extract(year from %s), extract(month from %s));""" % (column_name, column_name, table_schema, table_name, column_name, column_name)
+                    from {1}.{2}
+                    group by makedate(extract(year from `{0}`), DAYOFYEAR(`{0}`));""".format(column_name, table_schema, table_name)
+        #print(sql_agg_month)
         try:
             cursor_source.execute(sql_agg_month)
             rows = cursor_source.fetchall()
+            
             if len(rows) < thresold:
                 for row in rows:
-                    sql_insert = """INSERT INTO dates (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_VALUE, FREQUENCY_NUMBER)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?)"""
+                    if METADATA_ENGINE == 'mssqlserver':
+                        sql_insert = """INSERT INTO dates (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_VALUE, FREQUENCY_NUMBER)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?)"""
+                    elif METADATA_ENGINE == 'mysql':
+                        sql_insert = """INSERT INTO dates (SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_VALUE, FREQUENCY_NUMBER)
+                                        VALUES (%s, %s, %s, %s, %s, %s, %s)"""
                     cursor_metadata.execute(sql_insert, (server_name, table_catalog, table_schema, table_name, column_name, row[0], row[1]))
                     conn_metadata.commit()
         except:
@@ -815,35 +1011,60 @@ def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, ve
         return
     
     def updateFrequencyPercentage(server_name, table_catalog, table_schema, table_name, column_name):
-        sql_total = """SELECT SUM(FREQUENCY_NUMBER) AS TOTAL
-                        FROM dates
-                        WHERE SERVER_NAME = ?
-                         AND TABLE_CATALOG = ?
-                         AND TABLE_SCHEMA = ?
-                         AND TABLE_NAME = ?
-                         AND COLUMN_NAME = ?;"""
-        cursor_metadata.execute(sql_total, (server_name, table_catalog, table_schema, table_name, column_name))
-        total = cursor_metadata.fetchall()[0][0]
-        
-        sql_frequency = """SELECT DATA_VALUE, FREQUENCY_NUMBER
+        if METADATA_ENGINE == 'mssqlserver':
+            sql_total = """SELECT SUM(FREQUENCY_NUMBER) AS TOTAL
+                            FROM dates
+                            WHERE SERVER_NAME = ?
+                            AND TABLE_CATALOG = ?
+                            AND TABLE_SCHEMA = ?
+                            AND TABLE_NAME = ?
+                            AND COLUMN_NAME = ?;"""
+            sql_frequency = """SELECT DATA_VALUE, FREQUENCY_NUMBER
                             FROM dates
                             WHERE SERVER_NAME = ?
                              AND TABLE_CATALOG = ?
                              AND TABLE_SCHEMA = ?
                              AND TABLE_NAME = ?
                              AND COLUMN_NAME = ?;"""
+        elif METADATA_ENGINE == 'mysql':
+            sql_total = """SELECT SUM(FREQUENCY_NUMBER) AS TOTAL
+                            FROM dates
+                            WHERE SERVER_NAME = %s
+                            AND TABLE_CATALOG = %s
+                            AND TABLE_SCHEMA = %s
+                            AND TABLE_NAME = %s
+                            AND COLUMN_NAME = %s;"""
+            sql_frequency = """SELECT DATA_VALUE, FREQUENCY_NUMBER
+                            FROM dates
+                            WHERE SERVER_NAME = %s
+                             AND TABLE_CATALOG = %s
+                             AND TABLE_SCHEMA = %s
+                             AND TABLE_NAME = %s
+                             AND COLUMN_NAME = %s;"""
+        cursor_metadata.execute(sql_total, (server_name, table_catalog, table_schema, table_name, column_name))
+        total = cursor_metadata.fetchall()[0][0]
+        
         cursor_metadata.execute(sql_frequency, (server_name, table_catalog, table_schema, table_name, column_name))
         rows = cursor_metadata.fetchall()
         pbar = tqdm(rows)
         for row in pbar:
             pbar.set_description('Updating {}'.format(column_name))
-            sql_update = """UPDATE dates SET FREQUENCY_PERCENTAGE = ?
-                            WHERE SERVER_NAME = ?
-                             AND TABLE_CATALOG = ?
-                             AND TABLE_SCHEMA = ?
-                             AND TABLE_NAME = ?
-                             AND COLUMN_NAME = ?
-                             AND DATA_VALUE = ?;"""
+            if METADATA_ENGINE == 'mssqlserver':
+                sql_update = """UPDATE dates SET FREQUENCY_PERCENTAGE = ?
+                                WHERE SERVER_NAME = ?
+                                AND TABLE_CATALOG = ?
+                                AND TABLE_SCHEMA = ?
+                                AND TABLE_NAME = ?
+                                AND COLUMN_NAME = ?
+                                AND DATA_VALUE = ?;"""
+            elif METADATA_ENGINE == 'mysql':
+                sql_update = """UPDATE dates SET FREQUENCY_PERCENTAGE = %s
+                                WHERE SERVER_NAME = %s
+                                AND TABLE_CATALOG = %s
+                                AND TABLE_SCHEMA = %s
+                                AND TABLE_NAME = %s
+                                AND COLUMN_NAME = %s
+                                AND DATA_VALUE = %s;"""
             cursor_metadata.execute(sql_update, ((row[1] / total), server_name, table_catalog, table_schema, table_name, column_name, row[0]))
             conn_metadata.commit()
         return
@@ -853,12 +1074,20 @@ def insertOrUpdateDates(server_name, table_catalog, table_schema, table_name, ve
     for column in pbar:
         pbar.set_description('Column {}'.format(column[4]))
         if checkIfTableExistInDates(server_name, table_catalog, table_schema, table_name, column[4]) > 0:
-            sql_delete = """delete from dates
-                            WHERE SERVER_NAME = ?
-                             AND TABLE_CATALOG = ?
-                             AND TABLE_SCHEMA = ?
-                             AND TABLE_NAME = ?
-                             AND COLUMN_NAME = ?;"""
+            if METADATA_ENGINE == 'mssqlserver':
+                sql_delete = """delete from dates
+                                WHERE SERVER_NAME = ?
+                                AND TABLE_CATALOG = ?
+                                AND TABLE_SCHEMA = ?
+                                AND TABLE_NAME = ?
+                                AND COLUMN_NAME = ?;"""
+            elif METADATA_ENGINE == 'mysql':
+                sql_delete = """delete from dates
+                                WHERE SERVER_NAME = %s
+                                AND TABLE_CATALOG = %s
+                                AND TABLE_SCHEMA = %s
+                                AND TABLE_NAME = %s
+                                AND COLUMN_NAME = %s;"""
             cursor_metadata.execute(sql_delete, (server_name, table_catalog, table_schema, table_name, column[4]))
             conn_metadata.commit()
         
@@ -1049,20 +1278,36 @@ def getTablesFromServer(server_name, table_catalog, table_schema, n_rows_gt = 0)
     Given a server name, it will returns SERVER_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, and N_ROWS.
     This list can be used to go over each table and process it.
     """
-    conn_metadata = get_db_connection(metadata_connection_params)
+    if METADATA_ENGINE == 'mssqlserver':
+        conn_metadata = get_db_connection(metadata_connection_params)
+    elif METADATA_ENGINE == 'mysql':
+        conn_metadata = get_mysql_connection('metadata')
     cursor_metadata = conn_metadata.cursor()
 
-    sql = """select distinct SERVER_NAME 
-                , TABLE_CATALOG 
-                , TABLE_SCHEMA 
-                , TABLE_NAME
-                , N_ROWS
-                from tables
-                where SERVER_NAME = ?
-                AND TABLE_CATALOG = ?
-                AND TABLE_SCHEMA = ?
-                    and N_ROWS > {}
-                order by N_ROWS;""".format(n_rows_gt)
+    if METADATA_ENGINE == 'mssqlserver':
+        sql = """select distinct SERVER_NAME 
+                    , TABLE_CATALOG 
+                    , TABLE_SCHEMA 
+                    , TABLE_NAME
+                    , N_ROWS
+                    from tables
+                    where SERVER_NAME = ?
+                    AND TABLE_CATALOG = ?
+                    AND TABLE_SCHEMA = ?
+                        and N_ROWS > {}
+                    order by N_ROWS;""".format(n_rows_gt)
+    elif METADATA_ENGINE == 'mysql':
+        sql = """select distinct SERVER_NAME 
+                    , TABLE_CATALOG 
+                    , TABLE_SCHEMA 
+                    , TABLE_NAME
+                    , N_ROWS
+                    from tables
+                    where SERVER_NAME = %s
+                    AND TABLE_CATALOG = %s
+                    AND TABLE_SCHEMA = %s
+                        and N_ROWS > {}
+                    order by N_ROWS;""".format(n_rows_gt)
     cursor_metadata.execute(sql, (server_name, table_catalog, table_schema))
     rows = cursor_metadata.fetchall()
 
@@ -1075,7 +1320,7 @@ def fill_columns(server_name, table_catalog, table_schema):
     if SOURCE_ENGINE == 'mssqlserver':
         conn_source = get_db_connection(source_connection_params)
     elif SOURCE_ENGINE == 'mysql':
-        conn_source = get_mysql_connection()
+        conn_source = get_mysql_connection('source')
     cursor_source = get_db_cursor(conn_source)
 
     print('\n[', colored('OK', 'green'), ']', """\tCollecting data about the:
@@ -1119,7 +1364,8 @@ def fill_columns(server_name, table_catalog, table_schema):
     cursor_source.close()
     conn_source.close()
 
-    conn_metadata = get_db_connection(metadata_connection_params)
+    conn_metadata = get_mysql_connection('metadata')
+    #conn_metadata = get_db_connection(metadata_connection_params)
     cursor_metadata = conn_metadata.cursor()
 
     for row in tqdm(rows, desc = 'Columns'):
@@ -1190,7 +1436,7 @@ def describe_server(server_name, table_catalog, table_schema):
     fill_uniques(server_name, table_catalog, table_schema)
     fill_data_values(server_name, table_catalog, table_schema)
     fill_dates(server_name, table_catalog, table_schema)
-    fill_stats(server_name, table_catalog, table_schema)
+    #fill_stats(server_name, table_catalog, table_schema)
     return
 
 ignore_columns = ['InsertETLLoadID', 'UpdateETLLoadID']
