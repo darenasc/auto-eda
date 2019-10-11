@@ -1,3 +1,5 @@
 notebook/.ipynb_checkpoints/*
 notebook/Example MySQL.ipynb
 notebook/Example Postgres.ipynb
+notebook/__pycache__/
+notebook/*
